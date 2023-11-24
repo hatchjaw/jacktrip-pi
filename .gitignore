@@ -1,0 +1,52 @@
+### C++ template
+# Prerequisites
+*.d
+
+# Compiled Object files
+*.elf
+*.o
+*.ko
+*.lo
+*.obj
+*.slo
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Compiled Dynamic libraries
+*.so
+*.so.*
+*.dylib
+*.dll
+
+# Fortran module files
+*.mod
+*.smod
+
+# Compiled Static libraries
+*.lai
+*.la
+*.a
+*.lib
+
+# Executables
+*.exe
+*.out
+*.app
+*.i*86
+*.x86_64
+*.hex
+
+# Circle
+*.img
+*.lst
+*.map
+Config.mk
+Config2.mk
+
+# CMake
+cmake-build-*
+
+### IDE
+.idea
