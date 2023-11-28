@@ -34,6 +34,8 @@
 #include <circle/net/netsubsystem.h>
 #include <circle/types.h>
 #include <circle/net/socket.h>
+#include <circle/sound/soundbasedevice.h>
+#include <circle/i2cmaster.h>
 #include "PacketHeader.h"
 
 enum TShutdownMode {
@@ -53,11 +55,16 @@ public:
     TShutdownMode Run(void);
 
 private:
-    const int EXIT_PACKET_SIZE{63};
+    static constexpr int AUDIO_BLOCK_SAMPLES{32};
+//    static constexpr int AUDIO_BLOCK_PERIOD_APPROX_US{AUDIO_BLOCK_SAMPLES * 22};
+    static constexpr int AUDIO_BLOCK_PERIOD_APPROX_US{650};
+    static constexpr int NUM_CHANNELS{2};
+    static constexpr int EXIT_PACKET_SIZE{63};
+    static constexpr s16 CHANNEL_FRAME_SIZE{AUDIO_BLOCK_SAMPLES * sizeof(s16)};
 
     // do not change this order
-    CActLED m_ActLED;
-    CKernelOptions m_Options;
+    CActLED mActLED;
+    CKernelOptions mOptions;
     CDeviceNameService m_DeviceNameService;
     CScreenDevice m_Screen;
     CSerialDevice m_Serial;
@@ -65,20 +72,30 @@ private:
     CInterruptSystem m_Interrupt;
     CTimer m_Timer;
     CLogger mLogger;
+    CI2CMaster m_I2CMaster;
     CUSBHCIDevice m_USBHCI;
     CScheduler m_Scheduler;
     CNetSubSystem m_Net;
 
-    CSocket mTcpSocket;
     CSocket mUdpSocket;
 
-    u16 mServerUdpPort;
+    u16 mServerUdpPort{0};
     boolean mConnected{false};
-    u8 mBuffer[FRAME_BUFFER_SIZE];
+//    u8 mBuffer[FRAME_BUFFER_SIZE];
     JackTripPacketHeader packetHeader{
-            0, 0, 32, samplingRateT::SR44, 1 << (BIT16 + 2), 2, 2
+            0,
+            0,
+            AUDIO_BLOCK_SAMPLES,
+            samplingRateT::SR44,
+            1 << (BIT16 + 2),
+            NUM_CHANNELS,
+            NUM_CHANNELS
     };
-    const u16 kUdpPacketSize{sizeof(JackTripPacketHeader) + 2 * 32 * sizeof(u16)};
+    const u16 kUdpPacketSize{sizeof(JackTripPacketHeader) + NUM_CHANNELS * AUDIO_BLOCK_SAMPLES * sizeof(u16)};
+
+    CSoundBaseDevice *m_pSound;
+
+    s16** audioBuffer;
 
     void Receive();
 
@@ -87,6 +104,12 @@ private:
     bool isExitPacket(int size, const u8 *packet) const;
 
     boolean Connect();
+
+    bool StartAudio();
+
+    void GetSoundData(void *pBuffer, unsigned int nFrames);
+
+    void WriteSoundData(unsigned int nFrames);
 };
 
 #endif

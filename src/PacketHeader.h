@@ -37,4 +37,6 @@ public:
     u8 NumOutgoingChannelsToNet; ///< Number of outgoing Channels to the network
 };
 
+#define PACKET_HEADER_SIZE sizeof(JackTripPacketHeader)
+
 #endif //HELLO_CIRCLE_PACKETHEADER_H

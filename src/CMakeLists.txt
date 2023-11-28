@@ -1,4 +1,4 @@
-add_executable(njclient
+add_executable(jtclient
         main.cpp
         kernel.cpp
 )

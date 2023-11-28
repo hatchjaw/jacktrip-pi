@@ -18,12 +18,17 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //
 #include "kernel.h"
+#include "config.h"
 #include <circle/net/in.h>
 #include <circle/net/ntpdaemon.h>
 #include <circle/net/syslogdaemon.h>
 #include <circle/net/ipaddress.h>
 #include <circle/util.h>
 #include <assert.h>
+#include <circle/sound/pwmsoundbasedevice.h>
+#include <circle/sound/i2ssoundbasedevice.h>
+#include <circle/sound/hdmisoundbasedevice.h>
+#include <circle/sound/usbsoundbasedevice.h>
 
 // Syslog configuration
 static const u8 SysLogServer[] = {192, 168, 10, 10};
@@ -31,11 +36,13 @@ static const u16 usServerPort = 8514;        // standard port is 514
 
 static const u16 tcpServerPort = 4464;
 static const u16 tcpClientBasePort = 49152;
+static const u16 tcpPortMax = (1 << 16) - 1;
+static const u16 tcpPortRange = tcpPortMax - tcpClientBasePort;
 static const u16 udpPort = 8888;
 
-static const u16 udpLocalPort = 41814;
-static const u16 udpRemotePort = 14841;
-static const u8 multicastGroup[] = {244, 4, 244, 4};
+//static const u16 udpLocalPort = 41814;
+//static const u16 udpRemotePort = 14841;
+//static const u8 multicastGroup[] = {244, 4, 244, 4};
 
 // Time configuration
 #undef USE_NTP
@@ -55,37 +62,63 @@ static const u8 DefaultGateway[] = {192, 168, 10, 1};
 static const u8 DNSServer[] = {192, 168, 10, 1};
 #endif
 
+#if WRITE_FORMAT == 0
+#define FORMAT        SoundFormatUnsigned8
+#define TYPE        u8
+#define TYPE_SIZE    sizeof (u8)
+#define FACTOR        ((1 << 7)-1)
+#define NULL_LEVEL    (1 << 7)
+#elif WRITE_FORMAT == 1
+#define FORMAT        SoundFormatSigned16
+#define TYPE        s16
+#define TYPE_SIZE    sizeof (s16)
+#define FACTOR        ((1 << 15)-1)
+#define NULL_LEVEL    0
+#elif WRITE_FORMAT == 2
+#define FORMAT		SoundFormatSigned24
+#define TYPE		s32
+#define TYPE_SIZE	(sizeof (u8)*3)
+#define FACTOR		((1 << 23)-1)
+#define NULL_LEVEL	0
+#endif
+
 static const char FromKernel[] = "kernel";
 
 CKernel::CKernel(void)
-        : m_Screen(m_Options.GetWidth(), m_Options.GetHeight()),
+        : m_Screen(mOptions.GetWidth(), mOptions.GetHeight()),
           m_Timer(&m_Interrupt),
-          mLogger(m_Options.GetLogLevel(), &m_Timer),
+          mLogger(mOptions.GetLogLevel(), &m_Timer),
+          m_I2CMaster(CMachineInfo::Get()->GetDevice(DeviceI2CMaster), true),
           m_USBHCI(&m_Interrupt, &m_Timer),
+#ifdef USE_VCHIQ_SOUND
+        m_VCHIQ (CMemorySystem::Get (), &m_Interrupt),
+#endif
 #ifndef USE_DHCP
           m_Net(IPAddress, NetMask, DefaultGateway, DNSServer),
 #endif
-          mTcpSocket(&m_Net, IPPROTO_TCP),
-          mUdpSocket(&m_Net, IPPROTO_UDP) {
-    m_ActLED.Blink(5, 150, 250);    // show we are alive
+          mUdpSocket(&m_Net, IPPROTO_UDP),
+          m_pSound(nullptr) {
+    audioBuffer = new s16*[NUM_CHANNELS];
+    for (int ch = 0; ch < NUM_CHANNELS; ++ch) {
+        audioBuffer[ch] = new s16[AUDIO_BLOCK_SAMPLES];
+    }
+    mActLED.Blink(5, 150, 250);    // show we are alive
 }
 
 CKernel::~CKernel(void) {
 }
 
 boolean CKernel::Initialize(void) {
-    boolean bOK = TRUE;
+    bool bOK = true;
 
-    if (bOK) {
-        bOK = m_Screen.Initialize();
-    }
+    bOK = m_Screen.Initialize();
 
     if (bOK) {
         bOK = m_Serial.Initialize(115200);
     }
 
     if (bOK) {
-        CDevice *pTarget = m_DeviceNameService.GetDevice(m_Options.GetLogDevice(), FALSE);
+        CDevice *pTarget = m_DeviceNameService.GetDevice(mOptions.GetLogDevice(), FALSE);
         if (pTarget == 0) {
             pTarget = &m_Screen;
         }
@@ -109,6 +142,17 @@ boolean CKernel::Initialize(void) {
         bOK = m_Net.Initialize();
     }
 
+    if (bOK) {
+        bOK = m_I2CMaster.Initialize();
+    }
+
+#ifdef USE_VCHIQ_SOUND
+    if (bOK)
+    {
+        bOK = m_VCHIQ.Initialize ();
+    }
+#endif
+
     return bOK;
 }
 
@@ -128,10 +172,24 @@ TShutdownMode CKernel::Run(void) {
 
     new CSysLogDaemon(&m_Net, ServerIP, usServerPort);
 
+    if (!StartAudio()) {
+        return ShutdownHalt;
+    }
+
     // Connect to JackTrip server.
     if (!Connect()) {
         return ShutdownHalt;
     }
+
+    unsigned nQueueSizeFrames = m_pSound->GetQueueSizeFrames();
+
+//    // output sound data
+//    for (unsigned nCount = 0; m_pSound->IsActive(); nCount++) {
+//        m_Scheduler.MsSleep(QUEUE_SIZE_MSECS / 2);
+//
+//        // fill the whole queue free space with data
+//        WriteSoundData(nQueueSizeFrames - m_pSound->GetQueueFramesAvail());
+//    }
 
     while (mConnected) {
         // Send packets to the server.
@@ -140,49 +198,13 @@ TShutdownMode CKernel::Run(void) {
         // Receive packets from the server.
         Receive();
 
-        m_Scheduler.usSleep(726);
-//        m_Timer.usDelay(726);
+        if (m_pSound->IsActive()) {
+            WriteSoundData(nQueueSizeFrames - m_pSound->GetQueueFramesAvail());
+        }
+
+        m_Scheduler.usSleep(AUDIO_BLOCK_PERIOD_APPROX_US);
+//        m_Timer.usDelay(AUDIO_BLOCK_PERIOD_APPROX_US);
     }
-
-//    if (0 == mUdpSocket.Bind(udpLocalPort)) {
-//        mLogger.Write(FromKernel, LogNotice, "UDP Socket successfully bound to port %u", udpLocalPort);
-//    } else {
-//        mLogger.Write(FromKernel, LogPanic, "Failed to bind UDP socket to port %u; system will halt now.", udpLocalPort);
-//        return ShutdownHalt;
-//    }
-//
-////    CIPAddress multicastIP(multicastGroup);
-////    multicastIP.Format(&IPString);
-//
-//    if (0 == mUdpSocket.Connect(ServerIP, udpRemotePort)) {
-////        m_Logger.Write(FromKernel, LogNotice, "Successfully joined multicast group %s:%u",
-//        mLogger.Write(FromKernel, LogNotice, "Successfully set up socket with address %s:%u",
-//                       (const char *) IPString, (unsigned) udpRemotePort);
-//    } else {
-//        mLogger.Write(FromKernel, LogNotice, "Failed to join multicast group %s:%u; system will halt now.",
-//                       (const char *) IPString, (unsigned) udpRemotePort);
-//        return ShutdownHalt;
-//    }
-
-
-
-//    u8 buffer[kUdpPacketSize];
-//    int numBytesReceived;
-//
-//    for (unsigned i = 1; i <= 10; i++) {
-//        m_Scheduler.Sleep(1);
-//
-//        mLogger.Write(FromKernel, LogNotice, "Hello syslog! (%u)", i);
-//
-//        numBytesReceived = mUdpSocket.Receive(buffer, sizeof buffer, MSG_DONTWAIT);
-//        mLogger.Write(FromKernel, LogNotice, "%u: Received %d bytes.", i, numBytesReceived);
-//
-//        ++packetHeader.SeqNumber;
-//        memcpy(buffer, &packetHeader, sizeof(JackTripPacketHeader));
-//        mUdpSocket.Send(buffer, kUdpPacketSize, MSG_DONTWAIT);
-//    }
-
-
 
     mLogger.Write(FromKernel, LogPanic, "System will halt now.");
 
@@ -194,18 +216,19 @@ boolean CKernel::Connect() {
     CString ipString;
     serverIP.Format(&ipString);
 
-//    mTcpSocket = new CSocket(&m_Net, IPPROTO_TCP);
+    // Psuedorandomise the client TCP port to minimise the likelihood of port number re-use.
+    auto tcpClientPort = tcpClientBasePort + (CTimer::GetClockTicks() % tcpPortRange);
+    auto tcpSocket = new CSocket(&m_Net, IPPROTO_TCP);
 
-    auto clientPort = tcpClientBasePort + (CTimer::GetClockTicks() % (65535 - tcpClientBasePort));
     // Bind the TCP port.
-    if (mTcpSocket.Bind(clientPort) < 0) {
-        mLogger.Write(FromKernel, LogError, "Cannot bind TCP socket (port %u)", clientPort);
+    if (tcpSocket->Bind(tcpClientPort) < 0) {
+        mLogger.Write(FromKernel, LogError, "Cannot bind TCP socket (port %u)", tcpClientPort);
         return false;
     } else {
-        mLogger.Write(FromKernel, LogNotice, "Successfully bound TCP socket (port %u)", clientPort);
+        mLogger.Write(FromKernel, LogNotice, "Successfully bound TCP socket (port %u)", tcpClientPort);
     }
 
-    if (mTcpSocket.Connect(serverIP, tcpServerPort) < 0) {
+    if (tcpSocket->Connect(serverIP, tcpServerPort) < 0) {
         mLogger.Write(FromKernel, LogWarning, "Cannot establish TCP connection to JackTrip server.");
         return false;
     } else {
@@ -213,7 +236,7 @@ boolean CKernel::Connect() {
     }
 
     // Send the UDP port to the JackTrip server; block until sent.
-    if (4 != mTcpSocket.Send(reinterpret_cast<const u8 *>(&udpPort), 4, 0)) {
+    if (4 != tcpSocket->Send(reinterpret_cast<const u8 *>(&udpPort), 4, 0)) {
         mLogger.Write(FromKernel, LogError, "Failed to send UDP port to server.");
         return false;
     } else {
@@ -221,14 +244,12 @@ boolean CKernel::Connect() {
     }
 
     // Read the JackTrip server's UDP port; block until received.
-    if (4 != mTcpSocket.Receive(reinterpret_cast<u8 *>(&mServerUdpPort), 4, 0)) {
+    if (4 != tcpSocket->Receive(reinterpret_cast<u8 *>(&mServerUdpPort), 4, 0)) {
         mLogger.Write(FromKernel, LogError, "Failed to read UDP port from server.");
         return false;
     } else {
         mLogger.Write(FromKernel, LogNotice, "Received port %u from JackTrip server.", mServerUdpPort);
     }
-
-//    m_Timer.MsDelay(500);
 
     // Set up the UDP socket.
     if (mUdpSocket.Bind(udpPort) < 0) {
@@ -253,23 +274,20 @@ boolean CKernel::Connect() {
 }
 
 void CKernel::Receive() {
-//    mLogger.Write(FromKernel, LogDebug, "About to attempt to receive.");
-
     u8 buffer[kUdpPacketSize];
 
-//    int nBytesReceived{mUdpSocket.Receive(mBuffer, sizeof mBuffer, MSG_DONTWAIT)};
     int nBytesReceived{mUdpSocket.Receive(buffer, sizeof buffer, MSG_DONTWAIT)};
-
-    if (nBytesReceived != 144) {
-        mLogger.Write(FromKernel, LogNotice, "Received %d bytes", nBytesReceived);
-    }
 
     if (isExitPacket(nBytesReceived, buffer)) {
         mLogger.Write(FromKernel, LogNotice, "Exit packet received.");
         mConnected = false;
         return;
-    } else {
-//        mLogger.Write(FromKernel, LogNotice, "Received %d bytes", nBytesReceived);
+    } else if (nBytesReceived != kUdpPacketSize) {
+        mLogger.Write(FromKernel, LogWarning, "Received %d bytes", nBytesReceived);
+    }
+
+    for (int ch = 0; ch < NUM_CHANNELS; ++ch) {
+//        audioBuffer[ch] = reinterpret_cast<s16 *>(buffer + PACKET_HEADER_SIZE + CHANNEL_FRAME_SIZE * ch);
     }
 }
 
@@ -284,7 +302,11 @@ void CKernel::Send() {
 
 //    mLogger.Write(FromKernel, LogNotice, "Sending packet %u to %s:%d", packetHeader.SeqNumber, (const char *) ipString, mServerUdpPort);
 
-    auto nSent = mUdpSocket.Send(packet, kUdpPacketSize, MSG_DONTWAIT);
+    auto nBytesSent = mUdpSocket.Send(packet, kUdpPacketSize, MSG_DONTWAIT);
+
+    if (nBytesSent != kUdpPacketSize) {
+        mLogger.Write(FromKernel, LogWarning, "Sent %d bytes", nBytesSent);
+    }
 
 //    mLogger.Write(FromKernel, LogNotice, "Sent %d bytes.", nSent);
 }
@@ -299,4 +321,120 @@ boolean CKernel::isExitPacket(const int size, const u8 *packet) const {
         return true;
     }
     return false;
+}
+
+bool CKernel::StartAudio() {
+    // select the sound device
+    const char *pSoundDevice = mOptions.GetSoundDevice();
+    if (strcmp(pSoundDevice, "sndpwm") == 0) {
+        m_pSound = new CPWMSoundBaseDevice(&m_Interrupt, SAMPLE_RATE, CHUNK_SIZE);
+    } else if (strcmp(pSoundDevice, "sndi2s") == 0) {
+        m_pSound = new CI2SSoundBaseDevice(&m_Interrupt, SAMPLE_RATE, CHUNK_SIZE, FALSE,
+                                           &m_I2CMaster, DAC_I2C_ADDRESS);
+    } else if (strcmp(pSoundDevice, "sndhdmi") == 0) {
+        m_pSound = new CHDMISoundBaseDevice(&m_Interrupt, SAMPLE_RATE, CHUNK_SIZE);
+    }
+#if RASPPI >= 4
+        else if (strcmp (pSoundDevice, "sndusb") == 0)
+    {
+        m_pSound = new CUSBSoundBaseDevice (SAMPLE_RATE);
+    }
+#endif
+    else {
+#ifdef USE_VCHIQ_SOUND
+        m_pSound = new CVCHIQSoundBaseDevice (&m_VCHIQ, SAMPLE_RATE, CHUNK_SIZE,
+                    (TVCHIQSoundDestination) m_Options.GetSoundOption ());
+#else
+        m_pSound = new CPWMSoundBaseDevice(&m_Interrupt, SAMPLE_RATE, CHUNK_SIZE);
+#endif
+    }
+    assert (m_pSound != 0);
+
+//    // initialize oscillators
+//    m_LFO.SetWaveform (WaveformSine);
+//    m_LFO.SetFrequency (10.0);
+//
+//    m_VFO.SetWaveform (WaveformSine);
+//    m_VFO.SetFrequency (440.0);
+//    m_VFO.SetModulationVolume (0.25);
+
+    // configure sound device
+    if (!m_pSound->AllocateQueueFrames(QUEUE_SIZE_FRAMES)) {
+        mLogger.Write(FromKernel, LogPanic, "Cannot allocate sound queue");
+        return false;
+    }
+
+    m_pSound->SetWriteFormat(FORMAT, WRITE_CHANNELS);
+
+    // initially fill the whole queue with data
+    unsigned nQueueSizeFrames = m_pSound->GetQueueSizeFrames();
+
+    mLogger.Write(FromKernel, LogNotice, "Audio queue size: %u frames", nQueueSizeFrames);
+
+    WriteSoundData(nQueueSizeFrames);
+
+    // start sound device
+    if (!m_pSound->Start()) {
+        mLogger.Write(FromKernel, LogPanic, "Cannot start sound device");
+        return false;
+    }
+
+    return true;
+
+//    mLogger.Write(FromKernel, LogNotice, "Playing modulated 440 Hz tone");
+
+//    // output sound data
+//    for (unsigned nCount = 0; m_pSound->IsActive(); nCount++) {
+//        m_Scheduler.MsSleep(QUEUE_SIZE_MSECS / 2);
+//
+//        // fill the whole queue free space with data
+//        WriteSoundData(nQueueSizeFrames - m_pSound->GetQueueFramesAvail());
+//
+//        m_Screen.Rotor(0, nCount);
+//    }
+}
+
+void CKernel::WriteSoundData(unsigned nFrames) {
+    const unsigned nFramesPerWrite = 32;
+    u8 buffer[nFramesPerWrite * WRITE_CHANNELS * TYPE_SIZE];
+
+    while (nFrames > 0) {
+        unsigned nWriteFrames = nFrames < nFramesPerWrite ? nFrames : nFramesPerWrite;
+
+        GetSoundData(buffer, nWriteFrames);
+
+        unsigned nWriteBytes = nWriteFrames * WRITE_CHANNELS * TYPE_SIZE;
+
+        int nResult = m_pSound->Write(buffer, nWriteBytes);
+        if (nResult != (int) nWriteBytes) {
+            mLogger.Write(FromKernel, LogError, "Sound data dropped");
+        }
+
+        nFrames -= nWriteFrames;
+
+        m_Scheduler.Yield();        // ensure the VCHIQ tasks can run
+    }
+}
+
+void CKernel::GetSoundData(void *pBuffer, unsigned nFrames) {
+    u8 *pBuffer8 = (u8 *) pBuffer;
+
+    unsigned nSamples = nFrames * WRITE_CHANNELS;
+
+    for (unsigned i = 0; i < nSamples;) {
+        unsigned ch{0};
+//        m_LFO.NextSample ();
+//        m_VFO.NextSample ();
+//
+        auto fLevel = audioBuffer[ch][i]; //m_VFO.GetOutputLevel ();
+        TYPE nLevel = (TYPE) (fLevel * VOLUME * FACTOR + NULL_LEVEL);
+
+        memcpy(&pBuffer8[i++ * TYPE_SIZE], &nLevel, TYPE_SIZE);
+#if WRITE_CHANNELS == 2
+        ++ch;
+        fLevel = audioBuffer[ch][i]; //m_VFO.GetOutputLevel ();
+        nLevel = (TYPE) (fLevel * VOLUME * FACTOR + NULL_LEVEL);
+        memcpy(&pBuffer8[i++ * TYPE_SIZE], &nLevel, TYPE_SIZE);
+#endif
+    }
 }
