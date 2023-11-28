@@ -18,7 +18,6 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //
 #include "kernel.h"
-#include "config.h"
 #include <circle/net/in.h>
 #include <circle/net/ntpdaemon.h>
 #include <circle/net/syslogdaemon.h>
@@ -62,26 +61,6 @@ static const u8 DefaultGateway[] = {192, 168, 10, 1};
 static const u8 DNSServer[] = {192, 168, 10, 1};
 #endif
 
-#if WRITE_FORMAT == 0
-#define FORMAT        SoundFormatUnsigned8
-#define TYPE        u8
-#define TYPE_SIZE    sizeof (u8)
-#define FACTOR        ((1 << 7)-1)
-#define NULL_LEVEL    (1 << 7)
-#elif WRITE_FORMAT == 1
-#define FORMAT        SoundFormatSigned16
-#define TYPE        s16
-#define TYPE_SIZE    sizeof (s16)
-#define FACTOR        ((1 << 15)-1)
-#define NULL_LEVEL    0
-#elif WRITE_FORMAT == 2
-#define FORMAT		SoundFormatSigned24
-#define TYPE		s32
-#define TYPE_SIZE	(sizeof (u8)*3)
-#define FACTOR		((1 << 23)-1)
-#define NULL_LEVEL	0
-#endif
-
 static const char FromKernel[] = "kernel";
 
 CKernel::CKernel(void)
@@ -98,9 +77,9 @@ CKernel::CKernel(void)
 #endif
           mUdpSocket(&m_Net, IPPROTO_UDP),
           m_pSound(nullptr) {
-    audioBuffer = new s16*[NUM_CHANNELS];
-    for (int ch = 0; ch < NUM_CHANNELS; ++ch) {
-        audioBuffer[ch] = new s16[AUDIO_BLOCK_SAMPLES];
+    audioBuffer = new TYPE *[WRITE_CHANNELS];
+    for (int ch = 0; ch < WRITE_CHANNELS; ++ch) {
+        audioBuffer[ch] = new TYPE[QUEUE_SIZE_FRAMES];
     }
     mActLED.Blink(5, 150, 250);    // show we are alive
 }
@@ -199,11 +178,14 @@ TShutdownMode CKernel::Run(void) {
         Receive();
 
         if (m_pSound->IsActive()) {
+//            mLogger.Write(FromKernel, LogDebug, "nFrames: %u", nQueueSizeFrames - m_pSound->GetQueueFramesAvail());
             WriteSoundData(nQueueSizeFrames - m_pSound->GetQueueFramesAvail());
         }
 
-        m_Scheduler.usSleep(AUDIO_BLOCK_PERIOD_APPROX_US);
+        m_Scheduler.usSleep(AUDIO_BLOCK_PERIOD_US * .9);
 //        m_Timer.usDelay(AUDIO_BLOCK_PERIOD_APPROX_US);
+
+        ++bufferCount;
     }
 
     mLogger.Write(FromKernel, LogPanic, "System will halt now.");
@@ -286,9 +268,23 @@ void CKernel::Receive() {
         mLogger.Write(FromKernel, LogWarning, "Received %d bytes", nBytesReceived);
     }
 
-    for (int ch = 0; ch < NUM_CHANNELS; ++ch) {
-//        audioBuffer[ch] = reinterpret_cast<s16 *>(buffer + PACKET_HEADER_SIZE + CHANNEL_FRAME_SIZE * ch);
+    for (int ch = 0; ch < WRITE_CHANNELS; ++ch) { ;
+        audioBuffer[ch] = reinterpret_cast<TYPE *>(buffer + PACKET_HEADER_SIZE + CHANNEL_QUEUE_SIZE * ch);
     }
+
+//    if (bufferCount > 0 && bufferCount % 10000 <= 1) {
+    if (bufferCount % 10000 == 0) {
+        //        mLogger.Write(FromKernel, LogDebug, "Received %d bytes", nBytesReceived);
+        mLogger.Write(FromKernel, LogDebug, "Received net buffer:");
+        hexDump(buffer, nBytesReceived, true);
+
+//        mLogger.Write(FromKernel, LogDebug, "audioBuffer channel0:");
+//        for (unsigned s = 0; s < QUEUE_SIZE_FRAMES; ++s) {
+//            mLogger.Write(FromKernel, LogDebug, "chan0 frame%u: %04x", s, audioBuffer[0][s]);
+//        }
+    }
+
+    ++receivedCount;
 }
 
 void CKernel::Send() {
@@ -298,7 +294,7 @@ void CKernel::Send() {
 
     u8 packet[kUdpPacketSize];
     ++packetHeader.SeqNumber;
-    memcpy(packet, &packetHeader, sizeof(JackTripPacketHeader));
+    memcpy(packet, &packetHeader, PACKET_HEADER_SIZE);
 
 //    mLogger.Write(FromKernel, LogNotice, "Sending packet %u to %s:%d", packetHeader.SeqNumber, (const char *) ipString, mServerUdpPort);
 
@@ -346,9 +342,11 @@ bool CKernel::StartAudio() {
                     (TVCHIQSoundDestination) m_Options.GetSoundOption ());
 #else
         m_pSound = new CPWMSoundBaseDevice(&m_Interrupt, SAMPLE_RATE, CHUNK_SIZE);
+        pSoundDevice = "PWM";
 #endif
     }
     assert (m_pSound != 0);
+    mLogger.Write(FromKernel, LogNotice, "Instantiated %s sound device", pSoundDevice);
 
 //    // initialize oscillators
 //    m_LFO.SetWaveform (WaveformSine);
@@ -395,15 +393,22 @@ bool CKernel::StartAudio() {
 }
 
 void CKernel::WriteSoundData(unsigned nFrames) {
-    const unsigned nFramesPerWrite = 32;
+    const unsigned nFramesPerWrite = QUEUE_SIZE_FRAMES;
     u8 buffer[nFramesPerWrite * WRITE_CHANNELS * TYPE_SIZE];
 
     while (nFrames > 0) {
         unsigned nWriteFrames = nFrames < nFramesPerWrite ? nFrames : nFramesPerWrite;
+//        mLogger.Write(FromKernel, LogDebug, "nWriteFrames: %u", nWriteFrames);
 
         GetSoundData(buffer, nWriteFrames);
 
         unsigned nWriteBytes = nWriteFrames * WRITE_CHANNELS * TYPE_SIZE;
+        if (nWriteBytes != 128) mLogger.Write(FromKernel, LogDebug, "nWriteBytes: %u", nWriteBytes);
+
+        if (bufferCount % 10000 == 0) {
+            mLogger.Write(FromKernel, LogDebug, "Audio buffer to write:");
+            hexDump(buffer, 128, false);
+        }
 
         int nResult = m_pSound->Write(buffer, nWriteBytes);
         if (nResult != (int) nWriteBytes) {
@@ -421,20 +426,56 @@ void CKernel::GetSoundData(void *pBuffer, unsigned nFrames) {
 
     unsigned nSamples = nFrames * WRITE_CHANNELS;
 
-    for (unsigned i = 0; i < nSamples;) {
-        unsigned ch{0};
+//    for (unsigned ch{0}; ch < WRITE_CHANNELS; ++ch) {
+//        for (unsigned i{0}; i < CHANNEL_QUEUE_SIZE; ++i) {
+//            auto typeOffset{TYPE_SIZE * i};
+//            memcpy(&pBuffer8[ch * typeOffset + typeOffset], &audioBuffer[ch][i], TYPE_SIZE);
+//        }
+////        memcpy(pBuffer8 + CHANNEL_QUEUE_SIZE * ch, audioBuffer[ch], CHANNEL_QUEUE_SIZE);
+//    }
+
+    // Output is sample interleaved; audioBuffer is channel interleaved.
+    // For nSamples = 64, write 32 samples to each output channel.
+    // 0th sample: 0th channel, 0th frame => ++sample, channel = 1
+    // 1st sample: 1st channel, 0th frame => ++sample, channel = 0, ++frame
+    // 2nd sample: 0th channel, 1st frame => ++sample, channel = 1
+    // 3rd sample: 1st channel, 1st frame => ++sample, channel = 0, ++frame
+    for (unsigned sample = 0, frame = 0; sample < nSamples; ++frame) {
 //        m_LFO.NextSample ();
 //        m_VFO.NextSample ();
 //
-        auto fLevel = audioBuffer[ch][i]; //m_VFO.GetOutputLevel ();
-        TYPE nLevel = (TYPE) (fLevel * VOLUME * FACTOR + NULL_LEVEL);
-
-        memcpy(&pBuffer8[i++ * TYPE_SIZE], &nLevel, TYPE_SIZE);
+//        auto fLevel = audioBuffer[ch][i]; //m_VFO.GetOutputLevel ();
+//        TYPE nLevel = (TYPE) (fLevel * VOLUME * FACTOR + NULL_LEVEL);
+//        mLogger.Write(FromKernel, LogDebug, "ch0 fr%u: %04x", frame, audioBuffer[0][frame]);
+        memcpy(&pBuffer8[sample++ * TYPE_SIZE], &audioBuffer[0][frame], TYPE_SIZE);
 #if WRITE_CHANNELS == 2
-        ++ch;
-        fLevel = audioBuffer[ch][i]; //m_VFO.GetOutputLevel ();
-        nLevel = (TYPE) (fLevel * VOLUME * FACTOR + NULL_LEVEL);
-        memcpy(&pBuffer8[i++ * TYPE_SIZE], &nLevel, TYPE_SIZE);
+//        fLevel = 0.f;//audioBuffer[ch][i]; //m_VFO.GetOutputLevel ();
+//        nLevel = (TYPE) (fLevel * VOLUME * FACTOR + NULL_LEVEL);
+        memcpy(&pBuffer8[sample++ * TYPE_SIZE], &audioBuffer[1][frame], TYPE_SIZE);
 #endif
     }
+}
+
+void CKernel::hexDump(const u8 *buffer, int length, bool doHeader) {
+    CString log, chunk;
+    size_t word{doHeader ? PACKET_HEADER_SIZE : 0}, row{0};
+    if (doHeader)log.Append("HEAD: ");
+    for (const u8 *p = buffer; word < length + (doHeader ? PACKET_HEADER_SIZE : 0); ++p, ++word) {
+        if (word % 16 == 0) {
+            if ((!doHeader && word > 0) || (doHeader && word > PACKET_HEADER_SIZE)) {
+                mLogger.Write(FromKernel, LogDebug, log);
+                log = "";
+                chunk.Format("%04x: ", row);
+                log.Append(chunk);
+                ++row;
+            }
+        } else if (word % 2 == 0) {
+            log.Append(" ");
+        }
+        chunk.Format("%02x ", *p);
+        log.Append(chunk);
+    }
+
+    log.Append("\n");
+    mLogger.Write(FromKernel, LogDebug, log);
 }

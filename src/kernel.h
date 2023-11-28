@@ -37,6 +37,7 @@
 #include <circle/sound/soundbasedevice.h>
 #include <circle/i2cmaster.h>
 #include "PacketHeader.h"
+#include "config.h"
 
 enum TShutdownMode {
     ShutdownNone,
@@ -55,13 +56,6 @@ public:
     TShutdownMode Run(void);
 
 private:
-    static constexpr int AUDIO_BLOCK_SAMPLES{32};
-//    static constexpr int AUDIO_BLOCK_PERIOD_APPROX_US{AUDIO_BLOCK_SAMPLES * 22};
-    static constexpr int AUDIO_BLOCK_PERIOD_APPROX_US{650};
-    static constexpr int NUM_CHANNELS{2};
-    static constexpr int EXIT_PACKET_SIZE{63};
-    static constexpr s16 CHANNEL_FRAME_SIZE{AUDIO_BLOCK_SAMPLES * sizeof(s16)};
-
     // do not change this order
     CActLED mActLED;
     CKernelOptions mOptions;
@@ -85,17 +79,19 @@ private:
     JackTripPacketHeader packetHeader{
             0,
             0,
-            AUDIO_BLOCK_SAMPLES,
+            QUEUE_SIZE_FRAMES,
             samplingRateT::SR44,
             1 << (BIT16 + 2),
-            NUM_CHANNELS,
-            NUM_CHANNELS
+            WRITE_CHANNELS,
+            WRITE_CHANNELS
     };
-    const u16 kUdpPacketSize{sizeof(JackTripPacketHeader) + NUM_CHANNELS * AUDIO_BLOCK_SAMPLES * sizeof(u16)};
+    const u16 kUdpPacketSize{sizeof(JackTripPacketHeader) + WRITE_CHANNELS * QUEUE_SIZE_FRAMES * sizeof(u16)};
 
     CSoundBaseDevice *m_pSound;
 
     s16** audioBuffer;
+    int receivedCount;
+    int bufferCount;
 
     void Receive();
 
@@ -110,6 +106,8 @@ private:
     void GetSoundData(void *pBuffer, unsigned int nFrames);
 
     void WriteSoundData(unsigned int nFrames);
+
+    void hexDump(const u8 *buffer, int length, bool doHeader = false);
 };
 
 #endif
