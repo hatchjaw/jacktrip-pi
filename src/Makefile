@@ -4,7 +4,7 @@
 
 CIRCLEHOME = ../circle
 
-OBJS	= main.o kernel.o
+OBJS	= main.o kernel.o oscillator.o
 
 LIBS	= $(CIRCLEHOME)/lib/usb/libusb.a \
 	  $(CIRCLEHOME)/lib/input/libinput.a \

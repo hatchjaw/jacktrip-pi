@@ -9,5 +9,6 @@ include_directories(circle/include circle/lib)
 
 add_subdirectory(circle/sample/01-gpiosimple)
 add_subdirectory(circle/sample/33-syslog)
+add_subdirectory(circle/sample/34-sounddevices)
 
 add_subdirectory(src)

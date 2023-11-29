@@ -38,6 +38,7 @@
 #include <circle/i2cmaster.h>
 #include "PacketHeader.h"
 #include "config.h"
+#include "oscillator.h"
 
 enum TShutdownMode {
     ShutdownNone,
@@ -89,7 +90,9 @@ private:
 
     CSoundBaseDevice *m_pSound;
 
+    COscillator m_VFO;
     s16** audioBuffer;
+    s16* b;
     int receivedCount;
     int bufferCount;
 
@@ -108,6 +111,8 @@ private:
     void WriteSoundData(unsigned int nFrames);
 
     void hexDump(const u8 *buffer, int length, bool doHeader = false);
+
+    bool shouldLog() const;
 };
 
 #endif
