@@ -36,9 +36,11 @@
 #include <circle/net/socket.h>
 #include <circle/sound/soundbasedevice.h>
 #include <circle/i2cmaster.h>
+#include <circle/util.h>
 #include "PacketHeader.h"
 #include "config.h"
 #include "oscillator.h"
+#include "fifo.h"
 
 enum TShutdownMode {
     ShutdownNone,
@@ -76,7 +78,6 @@ private:
 
     u16 mServerUdpPort{0};
     boolean mConnected{false};
-//    u8 mBuffer[FRAME_BUFFER_SIZE];
     JackTripPacketHeader packetHeader{
             0,
             0,
@@ -86,13 +87,12 @@ private:
             WRITE_CHANNELS,
             WRITE_CHANNELS
     };
-    const u16 kUdpPacketSize{sizeof(JackTripPacketHeader) + WRITE_CHANNELS * QUEUE_SIZE_FRAMES * sizeof(u16)};
+    const u16 kUdpPacketSize{PACKET_HEADER_SIZE + WRITE_CHANNELS * QUEUE_SIZE_FRAMES * TYPE_SIZE};
 
     CSoundBaseDevice *m_pSound;
 
     COscillator m_VFO;
-    s16** audioBuffer;
-    s16* b;
+    FIFO<TYPE> audioBuffer;
     int receivedCount;
     int bufferCount;
 
@@ -108,7 +108,7 @@ private:
 
     void GetSoundData(void *pBuffer, unsigned int nFrames);
 
-    void WriteSoundData(unsigned int nFrames);
+    void WriteSoundData(unsigned nFrames);
 
     void hexDump(const u8 *buffer, int length, bool doHeader = false);
 
