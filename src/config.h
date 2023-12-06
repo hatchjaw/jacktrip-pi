@@ -22,7 +22,7 @@
 
 #define SAMPLE_RATE    44100        // overall system clock
 
-#define WRITE_FORMAT    1        // 0: 8-bit unsigned, 1: 16-bit signed, 2: 24-bit signed
+#define WRITE_FORMAT    1        // 0: 8-bit unsigned, 1: 16-bit signed, 2: 24-bit signed (See TSoundFormat)
 #define WRITE_CHANNELS    2        // 1: Mono, 2: Stereo
 
 #define VOLUME        0.5        // [0.0, 1.0]
@@ -53,6 +53,13 @@
 #define FACTOR		((1 << 23)-1)
 #define NULL_LEVEL	0
 #endif
+
+#define SERVER_IP 192,168,10,10
+#define TCP_SERVER_PORT 4464
+#define TCP_CLIENT_BASE_PORT 49152
+#define TCP_PORT_MAX ((1 << 16) - 1)
+#define TCP_PORT_RANGE (TCP_PORT_MAX - TCP_CLIENT_BASE_PORT)
+#define UDP_PORT 41814
 
 #define CHANNEL_QUEUE_SIZE (QUEUE_SIZE_FRAMES * TYPE_SIZE)
 #define EXIT_PACKET_SIZE 63

@@ -4,7 +4,7 @@
 
 CIRCLEHOME = ../circle
 
-OBJS	= main.o kernel.o oscillator.o
+OBJS	= main.o kernel.o JackTripClient.o
 
 LIBS	= $(CIRCLEHOME)/lib/usb/libusb.a \
 	  $(CIRCLEHOME)/lib/input/libinput.a \
@@ -12,7 +12,7 @@ LIBS	= $(CIRCLEHOME)/lib/usb/libusb.a \
 	  $(CIRCLEHOME)/lib/net/libnet.a \
 	  $(CIRCLEHOME)/lib/sched/libsched.a \
 	  $(CIRCLEHOME)/lib/libcircle.a \
-	  $(CIRCLEHOME)/lib/sound/libsound.a \
+	  $(CIRCLEHOME)/lib/sound/libsound.a
 
 include $(CIRCLEHOME)/Rules.mk
 

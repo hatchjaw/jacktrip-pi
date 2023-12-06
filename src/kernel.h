@@ -33,14 +33,7 @@
 #include <circle/sched/scheduler.h>
 #include <circle/net/netsubsystem.h>
 #include <circle/types.h>
-#include <circle/net/socket.h>
-#include <circle/sound/soundbasedevice.h>
-#include <circle/i2cmaster.h>
-#include <circle/util.h>
-#include "PacketHeader.h"
-#include "config.h"
-#include "oscillator.h"
-#include "fifo.h"
+#include "JackTripClient.h"
 
 enum TShutdownMode {
     ShutdownNone,
@@ -60,59 +53,20 @@ public:
 
 private:
     // do not change this order
-    CActLED mActLED;
-    CKernelOptions mOptions;
+    CActLED m_ActLED;
+    CKernelOptions m_Options;
     CDeviceNameService m_DeviceNameService;
     CScreenDevice m_Screen;
     CSerialDevice m_Serial;
     CExceptionHandler m_ExceptionHandler;
     CInterruptSystem m_Interrupt;
     CTimer m_Timer;
-    CLogger mLogger;
+    CLogger m_Logger;
     CI2CMaster m_I2CMaster;
     CUSBHCIDevice m_USBHCI;
     CScheduler m_Scheduler;
     CNetSubSystem m_Net;
-
-    CSocket mUdpSocket;
-
-    u16 mServerUdpPort{0};
-    boolean mConnected{false};
-    JackTripPacketHeader packetHeader{
-            0,
-            0,
-            QUEUE_SIZE_FRAMES,
-            samplingRateT::SR44,
-            1 << (BIT16 + 2),
-            WRITE_CHANNELS,
-            WRITE_CHANNELS
-    };
-    const u16 kUdpPacketSize{PACKET_HEADER_SIZE + WRITE_CHANNELS * QUEUE_SIZE_FRAMES * TYPE_SIZE};
-
-    CSoundBaseDevice *m_pSound;
-
-    COscillator m_VFO;
-    FIFO<TYPE> audioBuffer;
-    int receivedCount;
-    int bufferCount;
-
-    void Receive();
-
-    void Send();
-
-    bool isExitPacket(int size, const u8 *packet) const;
-
-    boolean Connect();
-
-    bool StartAudio();
-
-    void GetSoundData(void *pBuffer, unsigned int nFrames);
-
-    void WriteSoundData(unsigned nFrames);
-
-    void hexDump(const u8 *buffer, int length, bool doHeader = false);
-
-    bool shouldLog() const;
+    JackTripClient *m_pJTC;
 };
 
 #endif
