@@ -73,11 +73,6 @@ boolean CKernel::Initialize(void) {
 
     bOK = m_Screen.Initialize();
 
-    if (bOK) {
-        static const char Msg[] = "Starting ...\n";
-        m_Screen.Write(Msg, sizeof Msg - 1);
-    }
-
 #if 0
     if (bOK) {
         bOK = m_Serial.Initialize(115200);
@@ -143,7 +138,7 @@ boolean CKernel::Initialize(void) {
 TShutdownMode CKernel::Run(void) {
     m_Logger.Write(FromKernel, LogNotice, "Compile time: " __DATE__ " " __TIME__);
 
-    m_pJTC->Connect();
+//    m_pJTC->Connect();
 
     if (!m_pJTC->Start()) {
         m_Logger.Write(FromKernel, LogPanic, "Failed to start JackTrip client.");

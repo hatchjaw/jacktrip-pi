@@ -8,9 +8,9 @@
 
 static const char FromJTC[] = "jtclient";
 
-JackTripClient::JackTripClient(CLogger *pLogger, CNetSubSystem *pNet) :
-        m_FIFO{WRITE_CHANNELS, QUEUE_SIZE_FRAMES * 16},
+JackTripClient::JackTripClient(CLogger *pLogger, CNetSubSystem *pNet, int sampleMaxValue) :
         m_Logger(*pLogger),
+        m_FIFO{WRITE_CHANNELS, QUEUE_SIZE_FRAMES * 16, sampleMaxValue},
         m_pNet(pNet),
         m_pUdpSocket(nullptr) {
 }
@@ -28,49 +28,53 @@ bool JackTripClient::Connect(void) {
 
     // Pseudorandomise the client TCP port to minimise the likelihood of port number re-use.
     auto tcpClientPort = TCP_CLIENT_BASE_PORT + (CTimer::GetClockTicks() % TCP_PORT_RANGE);
-    auto tcpSocket = new CSocket(m_pNet, IPPROTO_TCP);
-    assert(tcpSocket);
+    m_pTcpSocket = new CSocket(m_pNet, IPPROTO_TCP);
+    assert(m_pTcpSocket);
+
+    m_Logger.Write(FromJTC, LogNotice, "Looking for a JackTrip server at %s...", (const char *) ipString);
 
     // Bind the TCP port.
-    if (tcpSocket->Bind(tcpClientPort) < 0) {
+    if (m_pTcpSocket->Bind(tcpClientPort) < 0) {
         m_Logger.Write(FromJTC, LogError, "Cannot bind TCP socket (port %u)", tcpClientPort);
+        Disconnect();
         return false;
     } else {
         m_Logger.Write(FromJTC, LogNotice, "Successfully bound TCP socket (port %u)", tcpClientPort);
     }
 
-    if (tcpSocket->Connect(serverIP, TCP_SERVER_PORT) < 0) {
+    if (m_pTcpSocket->Connect(serverIP, TCP_SERVER_PORT) < 0) {
         m_Logger.Write(FromJTC, LogWarning, "Cannot establish TCP connection to JackTrip server.");
+        Disconnect();
         return false;
     } else {
         m_Logger.Write(FromJTC, LogNotice, "TCP connection with server accepted.");
     }
 
     // Send the UDP port to the JackTrip server; block until sent.
-    if (4 != tcpSocket->Send(reinterpret_cast<const u8 *>(&udpPort), 4, MSG_DONTWAIT)) {
+    if (4 != m_pTcpSocket->Send(reinterpret_cast<const u8 *>(&udpPort), 4, MSG_DONTWAIT)) {
         m_Logger.Write(FromJTC, LogError, "Failed to send UDP port to server.");
+        Disconnect();
         return false;
     } else {
         m_Logger.Write(FromJTC, LogNotice, "Sent UDP port number %u to JackTrip server.", udpPort);
     }
 
     // Read the JackTrip server's UDP port; block until received.
-    if (4 != tcpSocket->Receive(reinterpret_cast<u8 *>(&m_ServerUdpPort), 4, 0)) {
+    if (4 != m_pTcpSocket->Receive(reinterpret_cast<u8 *>(&m_ServerUdpPort), 4, 0)) {
         m_Logger.Write(FromJTC, LogError, "Failed to read UDP port from server.");
+        Disconnect();
         return false;
     } else {
         m_Logger.Write(FromJTC, LogNotice, "Received port %u from JackTrip server.", m_ServerUdpPort);
     }
 
-//    delete tcpSocket;
-
     m_pUdpSocket = new CSocket(m_pNet, IPPROTO_UDP);
+    assert(m_pUdpSocket);
 
     // Set up the UDP socket.
     if (m_pUdpSocket->Bind(udpPort) < 0) {
         m_Logger.Write(FromJTC, LogError, "Failed to bind UDP socket to port %u.", udpPort);
-        delete m_pUdpSocket;
-        m_pUdpSocket = nullptr;
+        Disconnect();
         return false;
     } else {
         m_Logger.Write(FromJTC, LogNotice, "UDP Socket successfully bound to port %u", udpPort);
@@ -78,8 +82,7 @@ bool JackTripClient::Connect(void) {
 
     if (m_pUdpSocket->Connect(serverIP, m_ServerUdpPort) < 0) {
         m_Logger.Write(FromJTC, LogError, "Failed to prepare UDP connection.");
-        delete m_pUdpSocket;
-        m_pUdpSocket = nullptr;
+        Disconnect();
         return false;
     } else {
         m_Logger.Write(FromJTC, LogNotice, "UDP connection prepared with %s:%u",
@@ -88,24 +91,36 @@ bool JackTripClient::Connect(void) {
 
     m_Logger.Write(FromJTC, LogNotice, "Ready!");
     m_Connected = true;
-    Send();
+
     return true;
+}
+
+void JackTripClient::Disconnect() {
+    if (m_pTcpSocket != nullptr) {
+        delete m_pTcpSocket;
+        m_pTcpSocket = nullptr;
+    }
+    if (m_pUdpSocket != nullptr) {
+        delete m_pUdpSocket;
+        m_pUdpSocket = nullptr;
+    }
+    m_Connected = false;
+    m_BufferCount = 0;
+    m_ReceivedCount = 0;
+    m_PacketHeader.SeqNumber = 0;
+    m_FIFO.Clear();
 }
 
 void JackTripClient::Run(void) {
     if (!m_Connected) {
-        m_Logger.Write(FromJTC, LogNotice, "Looking for a JackTrip server...");
-
+        m_ReceivedCount = 0;
+        CScheduler::Get()->Sleep(2);
         Connect();
-
-        if (!m_Connected) {
-            CScheduler::Get()->Sleep(5);
-        }
     }
 
     Send();
     Receive();
-    CScheduler::Get()->usSleep(QUEUE_SIZE_US * .85);
+    CScheduler::Get()->usSleep(QUEUE_SIZE_US * .9);
 }
 
 void JackTripClient::Send() {
@@ -135,12 +150,16 @@ void JackTripClient::Receive() {
 
     u8 buffer8[k_UdpPacketSize];
 
-    // TODO: try blocking instead of using a timer.
-    int nBytesReceived{m_pUdpSocket->Receive(buffer8, sizeof buffer8, MSG_DONTWAIT)};
+    // TODO: check how long since last receive; disconnect if threshold exceeded
+    int nBytesReceived{m_pUdpSocket->Receive(buffer8, sizeof buffer8, MSG_DONTWAIT)};//m_ReceivedCount == 0 ? MSG_DONTWAIT : 0)};
+
+    if (nBytesReceived > 0) {
+        ++m_ReceivedCount;
+    }
 
     if (IsExitPacket(nBytesReceived, buffer8)) {
         m_Logger.Write(FromJTC, LogNotice, "Exit packet received.");
-        m_Connected = false;
+        Disconnect();
         return;
     } else if (nBytesReceived > 0 && nBytesReceived != k_UdpPacketSize) {
         m_Logger.Write(FromJTC, LogWarning, "Expected %u bytes; received %d bytes", k_UdpPacketSize, nBytesReceived);
@@ -160,7 +179,7 @@ void JackTripClient::Receive() {
     m_FIFO.Write(buffer, CHUNK_SIZE);
 
 //    if (shouldLog()) {
-    if (ShouldLog()) {
+    if (ShouldLog() && false) {
         m_Logger.Write(FromJTC, LogDebug, "Received %d bytes via UDP", nBytesReceived);
 //        mLogger.Write(FromKernel, LogDebug, "Received net buffer:");
         HexDump(buffer8, nBytesReceived, true);
@@ -206,7 +225,7 @@ bool JackTripClient::IsExitPacket(int size, const u8 *packet) const {
 
 bool JackTripClient::ShouldLog() const { return m_BufferCount > 0 && m_BufferCount % 10000 == 0; }
 
-void JackTripClient::HexDump(const u8 *buffer, int length, bool doHeader) {
+void JackTripClient::HexDump(const u8 *buffer, unsigned int length, bool doHeader) {
     CString log{"\n"}, chunk;
     size_t word{doHeader ? PACKET_HEADER_SIZE : 0}, row{0};
     if (doHeader)log.Append("HEAD:");
@@ -234,7 +253,7 @@ void JackTripClient::HexDump(const u8 *buffer, int length, bool doHeader) {
 //// PWM //////////////////////////////////////////////////////////////////////
 
 JackTripClientPWM::JackTripClientPWM(CLogger *pLogger, CNetSubSystem *pNet, CInterruptSystem *pInterrupt) :
-        JackTripClient(pLogger, pNet),
+        JackTripClient(pLogger, pNet, GetRangeMax() - 1),
         CPWMSoundBaseDevice(pInterrupt, SAMPLE_RATE, CHUNK_SIZE * WRITE_CHANNELS) {
 //    CPWMSoundBaseDevice::SetWriteFormat(TSoundFormat::SoundFormatSigned16, WRITE_CHANNELS);
 }
@@ -242,9 +261,17 @@ JackTripClientPWM::JackTripClientPWM(CLogger *pLogger, CNetSubSystem *pNet, CInt
 unsigned int JackTripClientPWM::GetChunk(u32 *pBuffer, unsigned int nChunkSize) {
     unsigned nResult = nChunkSize;
 
-    m_FIFO.Read(pBuffer, nChunkSize);
+    m_FIFO.Read(pBuffer, nChunkSize, ShouldLog(), amp ? (1 << 15) - 1 : -(1 << 15));
+
+    if (ShouldLog()) {
+        m_Logger.Write(FromJTC, LogDebug, "Output buffer");
+        HexDump(reinterpret_cast<u8 *>(pBuffer), nChunkSize * sizeof(u32), false);
+    }
 
     ++m_BufferCount;
+    if (m_BufferCount % 4 == 0) {
+        amp = !amp;
+    }
 
     return nResult;
 }
@@ -261,7 +288,7 @@ boolean JackTripClientPWM::IsActive(void) {
 //// I2S //////////////////////////////////////////////////////////////////////
 
 JackTripClientI2S::JackTripClientI2S(CLogger *pLogger, CNetSubSystem *pNet, CInterruptSystem *pInterrupt, CI2CMaster *pI2CMaster) :
-        JackTripClient(pLogger, pNet),
+        JackTripClient(pLogger, pNet, GetRangeMax() - 1),
         CI2SSoundBaseDevice(pInterrupt, SAMPLE_RATE, CHUNK_SIZE * WRITE_CHANNELS, FALSE, pI2CMaster, DAC_I2C_ADDRESS) {
 //    CI2SSoundBaseDevice::SetWriteFormat(TSoundFormat::SoundFormatSigned16, WRITE_CHANNELS);
 }
@@ -269,7 +296,17 @@ JackTripClientI2S::JackTripClientI2S(CLogger *pLogger, CNetSubSystem *pNet, CInt
 unsigned int JackTripClientI2S::GetChunk(u32 *pBuffer, unsigned int nChunkSize) {
     unsigned nResult = nChunkSize;
 
-//    m_FIFO.Read(pBuffer, nChunkSize);
+    m_FIFO.Read(pBuffer, nChunkSize, ShouldLog(), amp ? (1 << 15) - 1 : -(1 << 15));
+
+    if (ShouldLog()) {
+        m_Logger.Write(FromJTC, LogDebug, "Output buffer");
+        HexDump(reinterpret_cast<u8 *>(pBuffer), nChunkSize * sizeof(u32), false);
+    }
+
+    ++m_BufferCount;
+    if (m_BufferCount % 44 == 0) {
+        amp = !amp;
+    }
 
     return nResult;
 }

@@ -2,8 +2,8 @@
 // Created by tar on 05/12/23.
 //
 
-#ifndef HELLO_CIRCLE_JACKTRIPCLIENT_H
-#define HELLO_CIRCLE_JACKTRIPCLIENT_H
+#ifndef JACKTRIP_PI_JACKTRIPCLIENT_H
+#define JACKTRIP_PI_JACKTRIPCLIENT_H
 
 
 #include <circle/sound/pwmsoundbasedevice.h>
@@ -18,7 +18,7 @@
 
 class JackTripClient {
 public:
-    explicit JackTripClient(CLogger *pLogger, CNetSubSystem *pNet);
+    explicit JackTripClient(CLogger *pLogger, CNetSubSystem *pNet, int sampleMaxValue = (1 << 16) - 1);
 
     bool Initialize(void);
 
@@ -35,32 +35,36 @@ protected:
 
     void Receive();
 
+    bool ShouldLog() const;
+
+    void HexDump(const u8 *buffer, unsigned int length, bool doHeader);
+
+    CLogger m_Logger;
     FIFO<TYPE> m_FIFO;
     bool m_Connected{false};
     int m_BufferCount{0};
-
+    bool amp{false};
 private:
     boolean IsExitPacket(int size, const u8 *packet) const;
 
-    bool ShouldLog() const;
+    void Disconnect();
 
-    CLogger m_Logger;
     CNetSubSystem *m_pNet;
     CSocket *m_pUdpSocket;
+    CSocket *m_pTcpSocket;
     u16 m_ServerUdpPort{0};
     JackTripPacketHeader m_PacketHeader{
             0,
             0,
             QUEUE_SIZE_FRAMES,
             samplingRateT::SR44,
-            1 << (BIT16 + 2),
+            AUDIO_BIT_RES * 8,
             WRITE_CHANNELS,
             WRITE_CHANNELS
     };
     const u16 k_UdpPacketSize{PACKET_HEADER_SIZE + WRITE_CHANNELS * QUEUE_SIZE_FRAMES * TYPE_SIZE};
-    int m_ReceivedCount{0};
 
-    void HexDump(const u8 *buffer, int length, bool doHeader);
+    int m_ReceivedCount{0};
 };
 
 //// PWM //////////////////////////////////////////////////////////////////////
@@ -92,4 +96,4 @@ private:
 };
 
 
-#endif //HELLO_CIRCLE_JACKTRIPCLIENT_H
+#endif //JACKTRIP_PI_JACKTRIPCLIENT_H

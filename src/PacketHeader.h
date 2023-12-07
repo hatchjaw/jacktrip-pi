@@ -2,8 +2,8 @@
 // Created by tar on 20/11/23.
 //
 
-#ifndef HELLO_CIRCLE_PACKETHEADER_H
-#define HELLO_CIRCLE_PACKETHEADER_H
+#ifndef JACKTRIP_PI_PACKETHEADER_H
+#define JACKTRIP_PI_PACKETHEADER_H
 
 enum audioBitResolutionT
 {
@@ -39,4 +39,4 @@ public:
 
 #define PACKET_HEADER_SIZE sizeof(JackTripPacketHeader)
 
-#endif //HELLO_CIRCLE_PACKETHEADER_H
+#endif //JACKTRIP_PI_PACKETHEADER_H
