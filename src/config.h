@@ -43,28 +43,24 @@
 
 #if WRITE_FORMAT == 0
 #define AUDIO_BIT_RES        BIT8
-#define FORMAT               SoundFormatUnsigned8
 #define TYPE                 u8
 #define TYPE_SIZE            sizeof (u8)
 #define FACTOR               ((1 << 7)-1)
 #define NULL_LEVEL           (1 << 7)
 #elif WRITE_FORMAT == 1
 #define AUDIO_BIT_RES        BIT16
-#define FORMAT               SoundFormatSigned16
 #define TYPE                 s16
 #define TYPE_SIZE            sizeof (s16)
 #define FACTOR               ((1 << 15)-1)
 #define NULL_LEVEL           0
 #elif WRITE_FORMAT == 2
 #define AUDIO_BIT_RES        BIT24
-#define FORMAT		         SoundFormatSigned24
 #define TYPE		         s32
 #define TYPE_SIZE	         (sizeof (u8)*3)
 #define FACTOR		         ((1 << 23)-1)
 #define NULL_LEVEL	         0
 #elif WRITE_FORMAT == 3
 #define AUDIO_BIT_RES        BIT32
-#define FORMAT               SoundFormatUnsigned32
 #define TYPE                 u32
 #define TYPE_SIZE            sizeof (u32)
 #define FACTOR               ((1 << 31)-1)

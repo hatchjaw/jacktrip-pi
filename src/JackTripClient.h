@@ -18,7 +18,7 @@
 
 class JackTripClient {
 public:
-    explicit JackTripClient(CLogger *pLogger, CNetSubSystem *pNet, int sampleMaxValue = (1 << 16) - 1);
+    explicit JackTripClient(CLogger *pLogger, CNetSubSystem *pNet);
 
     bool Initialize(void);
 
@@ -43,7 +43,7 @@ protected:
     FIFO<TYPE> m_FIFO;
     bool m_Connected{false};
     int m_BufferCount{0};
-    bool amp{false};
+    bool m_Pulse{false};
 private:
     boolean IsExitPacket(int size, const u8 *packet) const;
 
@@ -79,6 +79,8 @@ public:
 
 private:
     unsigned int GetChunk(u32 *pBuffer, unsigned int nChunkSize) override;
+
+    unsigned m_nMaxLevel, m_nZeroLevel;
 };
 
 //// I2S //////////////////////////////////////////////////////////////////////
@@ -93,6 +95,8 @@ public:
 
 private:
     unsigned int GetChunk(u32 *pBuffer, unsigned int nChunkSize) override;
+
+    const int k_nMinLevel, k_nMaxLevel;
 };
 
 

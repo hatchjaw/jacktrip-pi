@@ -8,9 +8,9 @@
 
 static const char FromJTC[] = "jtclient";
 
-JackTripClient::JackTripClient(CLogger *pLogger, CNetSubSystem *pNet, int sampleMaxValue) :
+JackTripClient::JackTripClient(CLogger *pLogger, CNetSubSystem *pNet) :
         m_Logger(*pLogger),
-        m_FIFO{WRITE_CHANNELS, QUEUE_SIZE_FRAMES * 16, sampleMaxValue},
+        m_FIFO{WRITE_CHANNELS, QUEUE_SIZE_FRAMES * 16},
         m_pNet(pNet),
         m_pUdpSocket(nullptr) {
 }
@@ -253,25 +253,52 @@ void JackTripClient::HexDump(const u8 *buffer, unsigned int length, bool doHeade
 //// PWM //////////////////////////////////////////////////////////////////////
 
 JackTripClientPWM::JackTripClientPWM(CLogger *pLogger, CNetSubSystem *pNet, CInterruptSystem *pInterrupt) :
-        JackTripClient(pLogger, pNet, GetRangeMax() - 1),
-        CPWMSoundBaseDevice(pInterrupt, SAMPLE_RATE, CHUNK_SIZE * WRITE_CHANNELS) {
+        JackTripClient(pLogger, pNet),
+        CPWMSoundBaseDevice(pInterrupt, SAMPLE_RATE, CHUNK_SIZE * WRITE_CHANNELS),
+        m_nMaxLevel(GetRangeMax() - 1),
+        m_nZeroLevel(m_nMaxLevel / 2) {
 //    CPWMSoundBaseDevice::SetWriteFormat(TSoundFormat::SoundFormatSigned16, WRITE_CHANNELS);
 }
 
 unsigned int JackTripClientPWM::GetChunk(u32 *pBuffer, unsigned int nChunkSize) {
+    auto *b = pBuffer;
+    // "Size of the buffer in words" -- numChannels * numFrames
     unsigned nResult = nChunkSize;
+    auto sampleMaxValue = m_nMaxLevel; // GetRangeMax() - 1;
+    auto sampleZeroValue = m_nZeroLevel; //sampleMaxValue / 2;
 
-    m_FIFO.Read(pBuffer, nChunkSize, ShouldLog(), amp ? (1 << 15) - 1 : -(1 << 15));
+    if (false) {
+        if (m_BufferCount % 7 == 0) {
+            m_Pulse = !m_Pulse;
+        }
+        float gain{.5f};
+        float amp = gain * sampleMaxValue / 2.f;
+        // Get current square wave sample.
+        int sample{m_Pulse ? (1 << 15) - 1 : -(1 << 15)};
+        // Convert to float [-1, 1)
+        float fSample{static_cast<float>(sample) / static_cast<float>(1 << 15)};
+        // Scale to u32 range
+        int nSample{static_cast<int>(fSample * amp + sampleZeroValue)};
+        if (ShouldLog()) {
+            CLogger::Get()->Write(FromJTC, LogDebug, "sample = %d (%04x)", sample, sample);
+            CLogger::Get()->Write(FromJTC, LogDebug, "fSample = %d / (1 << 15) = %f", sample, fSample);
+            CLogger::Get()->Write(FromJTC, LogDebug, "amp = %f * %u / 2 = %f", gain, sampleMaxValue, amp);
+            CLogger::Get()->Write(FromJTC, LogDebug, "nSample = %f * %f + %u = %d (%08x)", fSample, amp, sampleZeroValue, nSample, nSample);
+        }
+        for (; nChunkSize > 0; nChunkSize -= 2) {
+            *pBuffer++ = (u32) nSample;
+            *pBuffer++ = (u32) nSample;
+        }
+    } else {
+        m_FIFO.Read(pBuffer, nChunkSize, sampleMaxValue, false, ShouldLog());
+    }
 
     if (ShouldLog()) {
         m_Logger.Write(FromJTC, LogDebug, "Output buffer");
-        HexDump(reinterpret_cast<u8 *>(pBuffer), nChunkSize * sizeof(u32), false);
+        HexDump(reinterpret_cast<u8 *>(b), nResult * sizeof(u32), false);
     }
 
     ++m_BufferCount;
-    if (m_BufferCount % 4 == 0) {
-        amp = !amp;
-    }
 
     return nResult;
 }
@@ -288,25 +315,52 @@ boolean JackTripClientPWM::IsActive(void) {
 //// I2S //////////////////////////////////////////////////////////////////////
 
 JackTripClientI2S::JackTripClientI2S(CLogger *pLogger, CNetSubSystem *pNet, CInterruptSystem *pInterrupt, CI2CMaster *pI2CMaster) :
-        JackTripClient(pLogger, pNet, GetRangeMax() - 1),
-        CI2SSoundBaseDevice(pInterrupt, SAMPLE_RATE, CHUNK_SIZE * WRITE_CHANNELS, FALSE, pI2CMaster, DAC_I2C_ADDRESS) {
+        JackTripClient(pLogger, pNet),
+        CI2SSoundBaseDevice(pInterrupt, SAMPLE_RATE, CHUNK_SIZE * WRITE_CHANNELS, FALSE, pI2CMaster, DAC_I2C_ADDRESS),
+        k_nMinLevel(GetRangeMin() + 1),
+        k_nMaxLevel(GetRangeMax() - 1) {
 //    CI2SSoundBaseDevice::SetWriteFormat(TSoundFormat::SoundFormatSigned16, WRITE_CHANNELS);
 }
 
 unsigned int JackTripClientI2S::GetChunk(u32 *pBuffer, unsigned int nChunkSize) {
+    auto *b = pBuffer;
+    // "Size of the buffer in words" -- numChannels * numFrames
     unsigned nResult = nChunkSize;
+    auto sampleMaxValue = k_nMaxLevel;
+    auto sampleMinValue = k_nMinLevel;
 
-    m_FIFO.Read(pBuffer, nChunkSize, ShouldLog(), amp ? (1 << 15) - 1 : -(1 << 15));
+    if (false) {
+        if (m_BufferCount % 7 == 0) {
+            m_Pulse = !m_Pulse;
+        }
+        float gain{.5f};
+        float amp = gain * sampleMaxValue;
+        // Get current square wave sample.
+        int sample{m_Pulse ? (1 << 15) - 1 : -(1 << 15)};
+        // Convert to float [-1, 1)
+        float fSample{static_cast<float>(sample) / static_cast<float>(1 << 15)};
+        // Scale to u32 range
+        int nSample{static_cast<int>(fSample * amp)};
+        if (ShouldLog()) {
+            CLogger::Get()->Write(FromJTC, LogDebug, "sample = %d (%04x)", sample, sample);
+            CLogger::Get()->Write(FromJTC, LogDebug, "fSample = %d / (1 << 15) = %f", sample, fSample);
+            CLogger::Get()->Write(FromJTC, LogDebug, "amp = %f * %u = %f", gain, sampleMaxValue, amp);
+            CLogger::Get()->Write(FromJTC, LogDebug, "nSample = %f * %f = %d (%08x)", fSample, amp, nSample, nSample);
+        }
+        for (; nChunkSize > 0; nChunkSize -= 2) {
+            *pBuffer++ = (u32) nSample;
+            *pBuffer++ = (u32) nSample;
+        }
+    } else {
+        m_FIFO.Read(pBuffer, nChunkSize, sampleMaxValue, true, ShouldLog());
+    }
 
     if (ShouldLog()) {
         m_Logger.Write(FromJTC, LogDebug, "Output buffer");
-        HexDump(reinterpret_cast<u8 *>(pBuffer), nChunkSize * sizeof(u32), false);
+        HexDump(reinterpret_cast<u8 *>(b), nResult * sizeof(u32), false);
     }
 
     ++m_BufferCount;
-    if (m_BufferCount % 44 == 0) {
-        amp = !amp;
-    }
 
     return nResult;
 }

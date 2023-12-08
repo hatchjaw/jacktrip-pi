@@ -13,12 +13,10 @@ public:
     FIFO(u8 numChannels, u16 length, int sampleMaxValue = (1 << 15) - 1) :
             kNumChannels{numChannels},
             kLength{length},
-            k_nMaxLevel(sampleMaxValue),
             buffer{new T *[numChannels]} {
         for (int ch{0}; ch < kNumChannels; ++ch) {
             buffer[ch] = new T[kLength];
         }
-        m_nNullLevel = k_nMaxLevel / 2;
         Clear();
     }
 
@@ -86,17 +84,11 @@ public:
 ////        spinLock.Release();
 //    }
 
-    void Read(u32 *bufferToFill, u16 numFrames, bool debug, s16 s = 0) {
+    void Read(u32 *bufferToFill, u16 numFrames, int sampleMaxValue, bool isI2S, bool debug) {
+        float gain{.5f};
+        float amp = gain * sampleMaxValue / (isI2S ? 1.f : 2.f);
+
         spinLock.Acquire();
-//        for(; nChunkSize > 0; nChunkSize -= 2, ++readIndex){
-//            if (readIndex == kLength) {
-//                readIndex = 0;
-//            }
-//            *bufferToFill++ = (u32) buffer[0][readIndex];
-//            *bufferToFill++ = (u32) buffer[1][readIndex];
-//        }
-        float vol{1.f};
-        float amp = vol * static_cast<float>(k_nMaxLevel) / 2.f;
 
         for (u16 frame{0}; frame < numFrames; ++frame, ++readIndex) {
             if (readIndex == kLength) {
@@ -107,17 +99,20 @@ public:
 
             for (u8 channel{0}; channel < kNumChannels; ++channel) {
                 // Get sample in range [-32768, 32767]
-//                int sample{buffer[channel][readIndex]};
-                int sample{s};
+                int sample{buffer[channel][readIndex]};
                 // Convert to float [-1, 1)
                 float fSample{static_cast<float>(sample) / static_cast<float>(1 << 15)};
                 // Scale to u32 range
-                int nSample{static_cast<int>(fSample * amp + m_nNullLevel)};
+                int nSample{static_cast<int>(fSample * amp + (isI2S ? 0 : sampleMaxValue / 2))};
                 if (debug && frame == 0 && channel == 0) {
                     CLogger::Get()->Write("fifo", LogDebug, "sample = %d (%04x)", sample, sample);
                     CLogger::Get()->Write("fifo", LogDebug, "fSample = %d / (1 << 15) = %f", sample, fSample);
-                    CLogger::Get()->Write("fifo", LogDebug, "amp = %f * %u / 2 = %f", vol, k_nMaxLevel, amp);
-                    CLogger::Get()->Write("fifo", LogDebug, "nSample = %f * %f + %u = %d (%08x)", fSample, amp, m_nNullLevel, nSample, nSample);
+                    CLogger::Get()->Write("fifo", LogDebug, "amp = %f * %u / 2 = %f", gain, sampleMaxValue, amp);
+                    if (isI2S) {
+                        CLogger::Get()->Write("fifo", LogDebug, "nSample = %f * %f = %d (%08x)", fSample, amp, nSample, nSample);
+                    } else {
+                        CLogger::Get()->Write("fifo", LogDebug, "nSample = %f * %f + %u = %d (%08x)", fSample, amp, sampleMaxValue / 2, nSample, nSample);
+                    }
                 }
 
 //                bufferToFill[frameStart + channel] = (u32) buffer[channel][readIndex];
@@ -137,16 +132,14 @@ public:
 
         CLogger::Get()->Write("fifo", LogDebug, "Cleared fifo. Num channels %u, "
                                                 "num frames %u, write index %u, "
-                                                "read index %u, max level %u, null level %u",
-                              kNumChannels, kLength, writeIndex, readIndex, k_nMaxLevel, m_nNullLevel);
+                                                "read index %u",
+                              kNumChannels, kLength, writeIndex, readIndex);
     }
 
 private:
     const u8 kNumChannels;
     const u16 kLength;
-    const unsigned k_nMaxLevel;
 
-    unsigned m_nNullLevel;
     T **buffer;
     u16 writeIndex{0}, readIndex{0};
 
