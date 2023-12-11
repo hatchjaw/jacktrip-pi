@@ -5,6 +5,7 @@
 #include "JackTripClient.h"
 #include <circle/sched/scheduler.h>
 #include <circle/net/in.h>
+#include "math.h"
 
 static const char FromJTC[] = "jtclient";
 
@@ -12,7 +13,8 @@ JackTripClient::JackTripClient(CLogger *pLogger, CNetSubSystem *pNet) :
         m_Logger(*pLogger),
         m_FIFO{WRITE_CHANNELS, QUEUE_SIZE_FRAMES * 16},
         m_pNet(pNet),
-        m_pUdpSocket(nullptr) {
+        m_pUdpSocket(nullptr),
+        m_pTcpSocket(nullptr) {
 }
 
 bool JackTripClient::Initialize(void) {
@@ -120,7 +122,7 @@ void JackTripClient::Run(void) {
 
     Send();
     Receive();
-    CScheduler::Get()->usSleep(QUEUE_SIZE_US * .9);
+    CScheduler::Get()->usSleep(QUEUE_SIZE_US * .925);
 }
 
 void JackTripClient::Send() {
@@ -223,7 +225,7 @@ bool JackTripClient::IsExitPacket(int size, const u8 *packet) const {
     return false;
 }
 
-bool JackTripClient::ShouldLog() const { return m_BufferCount > 0 && m_BufferCount % 10000 == 0; }
+bool JackTripClient::ShouldLog() const { return false; }//m_BufferCount > 0 && m_BufferCount % 10000 == 0; }
 
 void JackTripClient::HexDump(const u8 *buffer, unsigned int length, bool doHeader) {
     CString log{"\n"}, chunk;
@@ -267,7 +269,7 @@ unsigned int JackTripClientPWM::GetChunk(u32 *pBuffer, unsigned int nChunkSize) 
     auto sampleMaxValue = m_nMaxLevel; // GetRangeMax() - 1;
     auto sampleZeroValue = m_nZeroLevel; //sampleMaxValue / 2;
 
-    if (false) {
+    if (m_DebugAudio) {
         if (m_BufferCount % 7 == 0) {
             m_Pulse = !m_Pulse;
         }
@@ -290,7 +292,7 @@ unsigned int JackTripClientPWM::GetChunk(u32 *pBuffer, unsigned int nChunkSize) 
             *pBuffer++ = (u32) nSample;
         }
     } else {
-        m_FIFO.Read(pBuffer, nChunkSize, sampleMaxValue, false, ShouldLog());
+        m_FIFO.Read(pBuffer, nChunkSize / WRITE_CHANNELS, sampleMaxValue, false, ShouldLog());
     }
 
     if (ShouldLog()) {
@@ -327,32 +329,38 @@ unsigned int JackTripClientI2S::GetChunk(u32 *pBuffer, unsigned int nChunkSize) 
     // "Size of the buffer in words" -- numChannels * numFrames
     unsigned nResult = nChunkSize;
     auto sampleMaxValue = k_nMaxLevel;
-    auto sampleMinValue = k_nMinLevel;
 
-    if (false) {
+    if (m_DebugAudio) {
         if (m_BufferCount % 7 == 0) {
             m_Pulse = !m_Pulse;
         }
-        float gain{.5f};
+        float gain{.1f};
         float amp = gain * sampleMaxValue;
-        // Get current square wave sample.
-        int sample{m_Pulse ? (1 << 15) - 1 : -(1 << 15)};
-        // Convert to float [-1, 1)
-        float fSample{static_cast<float>(sample) / static_cast<float>(1 << 15)};
-        // Scale to u32 range
-        int nSample{static_cast<int>(fSample * amp)};
-        if (ShouldLog()) {
-            CLogger::Get()->Write(FromJTC, LogDebug, "sample = %d (%04x)", sample, sample);
-            CLogger::Get()->Write(FromJTC, LogDebug, "fSample = %d / (1 << 15) = %f", sample, fSample);
-            CLogger::Get()->Write(FromJTC, LogDebug, "amp = %f * %u = %f", gain, sampleMaxValue, amp);
-            CLogger::Get()->Write(FromJTC, LogDebug, "nSample = %f * %f = %d (%08x)", fSample, amp, nSample, nSample);
-        }
+
         for (; nChunkSize > 0; nChunkSize -= 2) {
+            // Get current sine wave sample.
+            int sample{static_cast<int>((sin(m_fPhasor) + 1) * (1 << 15))};
+            m_fPhasor += 2.f * 3.141592654f * m_fF0 / SAMPLE_RATE;
+            if (m_fPhasor > 3.141592654f) {
+                m_fPhasor -= 6.283185307;
+            }
+
+            // Convert to float [-1, 1)
+            float fSample{static_cast<float>(sample) / static_cast<float>(1 << 15)};
+            // Scale to u32 range
+            int nSample{static_cast<int>(fSample * amp)};
+
             *pBuffer++ = (u32) nSample;
             *pBuffer++ = (u32) nSample;
         }
+//        if (ShouldLog()) {
+//            CLogger::Get()->Write(FromJTC, LogDebug, "sample = %d (%04x)", sample, sample);
+//            CLogger::Get()->Write(FromJTC, LogDebug, "fSample = %d / (1 << 15) = %f", sample, fSample);
+//            CLogger::Get()->Write(FromJTC, LogDebug, "amp = %f * %u = %f", gain, sampleMaxValue, amp);
+//            CLogger::Get()->Write(FromJTC, LogDebug, "nSample = %f * %f = %d (%08x)", fSample, amp, nSample, nSample);
+//        }
     } else {
-        m_FIFO.Read(pBuffer, nChunkSize, sampleMaxValue, true, ShouldLog());
+        m_FIFO.Read(pBuffer, nChunkSize / WRITE_CHANNELS, sampleMaxValue, true, ShouldLog());
     }
 
     if (ShouldLog()) {

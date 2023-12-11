@@ -44,6 +44,8 @@ protected:
     bool m_Connected{false};
     int m_BufferCount{0};
     bool m_Pulse{false};
+    bool m_DebugAudio{false};
+    float m_fPhasor{0.f}, m_fF0{440.f};
 private:
     boolean IsExitPacket(int size, const u8 *packet) const;
 

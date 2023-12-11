@@ -34,15 +34,20 @@ public:
      */
     void Write(const T **dataToWrite, u16 numFrames) {
         spinLock.Acquire();
-        for (int n{0}; n < numFrames; ++n, ++writeIndex) {
-            if (writeIndex == kLength) {
-                writeIndex = 0;
-            }
-
+        for (int n{0}; n < numFrames; ++n) {
             for (int ch{0}; ch < kNumChannels; ++ch) {
                 buffer[ch][writeIndex] = dataToWrite[ch][n];
             }
+
+            ++writeIndex;
+            if (writeIndex == readIndex) {
+                CLogger::Get()->Write("fifo", LogNotice, "Buffer full (Write); resetting.");
+                Reset();
+            } else if (writeIndex == kLength) {
+                writeIndex = 0;
+            }
         }
+
         spinLock.Release();
     }
 
@@ -90,11 +95,7 @@ public:
 
         spinLock.Acquire();
 
-        for (u16 frame{0}; frame < numFrames; ++frame, ++readIndex) {
-            if (readIndex == kLength) {
-                readIndex = 0;
-            }
-
+        for (u16 frame{0}; frame < numFrames; ++frame) {
             auto frameStart{frame * kNumChannels};
 
             for (u8 channel{0}; channel < kNumChannels; ++channel) {
@@ -103,7 +104,8 @@ public:
                 // Convert to float [-1, 1)
                 float fSample{static_cast<float>(sample) / static_cast<float>(1 << 15)};
                 // Scale to u32 range
-                int nSample{static_cast<int>(fSample * amp + (isI2S ? 0 : sampleMaxValue / 2))};
+                int nSample{static_cast<int>(fSample * amp + (isI2S ? 0.f : sampleMaxValue / 2.f))};
+
                 if (debug && frame == 0 && channel == 0) {
                     CLogger::Get()->Write("fifo", LogDebug, "sample = %d (%04x)", sample, sample);
                     CLogger::Get()->Write("fifo", LogDebug, "fSample = %d / (1 << 15) = %f", sample, fSample);
@@ -118,7 +120,17 @@ public:
 //                bufferToFill[frameStart + channel] = (u32) buffer[channel][readIndex];
                 bufferToFill[frameStart + channel] = (u32) nSample;
             }
+
+            ++readIndex;
+
+            if (readIndex == writeIndex) {
+                CLogger::Get()->Write("fifo", LogNotice, "Buffer exhausted (Read); resetting.");
+                Reset();
+            } else if (readIndex == kLength) {
+                readIndex = 0;
+            }
         }
+
         spinLock.Release();
     }
 
@@ -126,22 +138,35 @@ public:
      * Write zeros to the fifo and reset the write and read indices.
      */
     void Clear() {
-        memset(buffer[0], 0, kNumChannels * kLength * sizeof(T));
-        writeIndex = 0;
-        readIndex = static_cast<u16>(kLength / 2);
+        memset(*buffer, 0, kNumChannels * kLength * sizeof(T));
+        Reset();
 
-        CLogger::Get()->Write("fifo", LogDebug, "Cleared fifo. Num channels %u, "
+        CLogger::Get()->Write("fifo", LogDebug, "Cleared buffer. Num channels %u, "
                                                 "num frames %u, write index %u, "
                                                 "read index %u",
                               kNumChannels, kLength, writeIndex, readIndex);
     }
 
 private:
+    void Reset() {
+        writeIndex = 0;
+        readIndex = static_cast<u16>(kLength / 2);
+//                // If length = 16 and readIndex = writeIndex = 10, desired readIndex
+//                // is 10 - 8 = 2;
+//                // if length = 16 and readIndex = writeIndex = 6, desired readIndex
+//                // is 6 - 8 + 16 = 14
+//                int temp = static_cast<int>(readIndex) - (kLength / 2);
+//                if (temp < 0) {
+//                    temp += kLength;
+//                }
+//                readIndex = temp;
+    }
+
     const u8 kNumChannels;
-    const u16 kLength;
+    const u32 kLength;
 
     T **buffer;
-    u16 writeIndex{0}, readIndex{0};
+    u32 writeIndex{0}, readIndex{0};
 
     CSpinLock spinLock;
 };
