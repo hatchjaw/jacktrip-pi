@@ -1,22 +1,21 @@
-//
-// config.h
-//
-// Circle - A C++ bare metal environment for Raspberry Pi
-// Copyright (C) 2017-2022  R. Stange <rsta2@o2online.de>
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-//
+/**
+ * JackTrip client for bare-metal Raspberry Pi
+ * Copyright (C) 2023 Thomas Rushton
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <http://www.gnu.org/licenses/>.
+ */
+
 #ifndef JACKTRIP_PI_CONFIG_H
 #define JACKTRIP_PI_CONFIG_H
 
@@ -34,7 +33,7 @@
 #define QUEUE_SIZE_MSECS     100
 // number of samples, written to sound device at once
 #define CHUNK_SIZE           64 // (384 * 10)
-// microseconds per buffer; chunk_size/Fs
+// microseconds per buffer; (chunk_size/Fs) µs
 #define QUEUE_SIZE_US        (23 * CHUNK_SIZE)
 #define QUEUE_SIZE_FRAMES    CHUNK_SIZE
 
@@ -68,11 +67,12 @@
 #endif
 
 #define SERVER_IP            192,168,10,10
-#define TCP_SERVER_PORT      4464
-#define TCP_CLIENT_BASE_PORT 49152
-#define TCP_PORT_MAX         ((1 << 16) - 1)
-#define TCP_PORT_RANGE       (TCP_PORT_MAX - TCP_CLIENT_BASE_PORT)
-#define UDP_PORT             31713
+#define JACKTRIP_TCP_PORT    4464
+// The Internet Assigned Numbers Authority (IANA) suggests the range 49152 to
+// 65535 for dynamic or private ports.*/
+#define DYNAMIC_PORT_START   49152
+#define DYNAMIC_PORT_END     ((1 << 16) - 1)
+#define DYNAMIC_PORT_RANGE   (DYNAMIC_PORT_END - DYNAMIC_PORT_START)
 
 #define CHANNEL_QUEUE_SIZE   (QUEUE_SIZE_FRAMES * TYPE_SIZE)
 #define EXIT_PACKET_SIZE     63

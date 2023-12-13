@@ -1,42 +1,56 @@
-//
-// Created by tar on 20/11/23.
-//
+/**
+ * JackTrip client for bare-metal Raspberry Pi
+ * Copyright (C) 2023 Thomas Rushton
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <http://www.gnu.org/licenses/>.
+ */
 
 #ifndef JACKTRIP_PI_PACKETHEADER_H
 #define JACKTRIP_PI_PACKETHEADER_H
 
-enum audioBitResolutionT
+enum TAudioBitResolution
 {
-    BIT8 = 1,  ///< 8 bits
-    BIT16 = 2, ///< 16 bits (default)
-    BIT24 = 3, ///< 24 bits
-    BIT32 = 4  ///< 32 bits
+    BIT8 = 1,
+    BIT16 = 2,
+    BIT24 = 3,
+    BIT32 = 4
 };
 
-enum samplingRateT
+enum TSamplingRate
 {
-    SR22,  ///<  22050 Hz
-    SR32,  ///<  32000 Hz
-    SR44,  ///<  44100 Hz
-    SR48,  ///<  48000 Hz
-    SR88,  ///<  88200 Hz
-    SR96,  ///<  96000 Hz
-    SR192, ///< 192000 Hz
-    UNDEF  ///< Undefined
+    SR22,
+    SR32,
+    SR44,
+    SR48,
+    SR88,
+    SR96,
+    SR192,
+    UNDEF
 };
 
-struct JackTripPacketHeader
+struct TJackTripPacketHeader
 {
 public:
-    u64 TimeStamp;    ///< Time Stamp
-    u16 SeqNumber;    ///< Sequence Number
-    u16 BufferSize;   ///< Buffer Size in Samples
-    u8 SamplingRate;  ///< Sampling Rate in JackAudioInterface::samplingRateT
-    u8 BitResolution; ///< Audio Bit Resolution
-    u8 NumIncomingChannelsFromNet; ///< Number of incoming Channels from the network
-    u8 NumOutgoingChannelsToNet; ///< Number of outgoing Channels to the network
+    u64 nTimeStamp;
+    u16 nSeqNumber;
+    u16 nBufferSize;
+    u8 nSamplingRate;
+    u8 nBitResolution;
+    u8 nNumIncomingChannelsFromNet;
+    u8 nNumOutgoingChannelsToNet;
 };
 
-#define PACKET_HEADER_SIZE sizeof(JackTripPacketHeader)
+#define PACKET_HEADER_SIZE sizeof(TJackTripPacketHeader)
 
 #endif //JACKTRIP_PI_PACKETHEADER_H

@@ -1,30 +1,49 @@
-//
-// Created by tar on 30/11/23.
-//
+/**
+ * JackTrip client for bare-metal Raspberry Pi
+ * Copyright (C) 2023 Thomas Rushton
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <http://www.gnu.org/licenses/>.
+ */
 
 #ifndef JACKTRIP_PI_FIFO_H
 #define JACKTRIP_PI_FIFO_H
 
 #include <circle/types.h>
 
+static const char FromFIFO[] = "fifo";
+
 template<typename T>
-class FIFO {
+class CFIFO
+{
 public:
-    FIFO(u8 numChannels, u16 length, int sampleMaxValue = (1 << 15) - 1) :
-            kNumChannels{numChannels},
-            kLength{length},
-            buffer{new T *[numChannels]} {
-        for (int ch{0}; ch < kNumChannels; ++ch) {
-            buffer[ch] = new T[kLength];
+    CFIFO(u8 numChannels, u16 length, int sampleMaxValue = (1 << 15) - 1) :
+            k_nChannels{numChannels},
+            k_nLength{length},
+            m_pBuffer{new T *[numChannels]}
+    {
+        for (int ch{0}; ch < k_nChannels; ++ch) {
+            m_pBuffer[ch] = new T[k_nLength];
         }
         Clear();
     }
 
-    ~FIFO() {
-        for (int i{0}; i < kNumChannels; ++i) {
-            delete buffer[i];
+    ~CFIFO()
+    {
+        for (int i{0}; i < k_nChannels; ++i) {
+            delete m_pBuffer[i];
         }
-        delete[] buffer;
+        delete[] m_pBuffer;
     }
 
     /**
@@ -32,23 +51,24 @@ public:
      * @param dataToWrite
      * @param numFrames
      */
-    void Write(const T **dataToWrite, u16 numFrames) {
-        spinLock.Acquire();
+    void Write(const T **dataToWrite, u16 numFrames)
+    {
+        m_SpinLock.Acquire();
         for (int n{0}; n < numFrames; ++n) {
-            for (int ch{0}; ch < kNumChannels; ++ch) {
-                buffer[ch][writeIndex] = dataToWrite[ch][n];
+            for (int ch{0}; ch < k_nChannels; ++ch) {
+                m_pBuffer[ch][m_nWriteIndex] = dataToWrite[ch][n];
             }
 
-            ++writeIndex;
-            if (writeIndex == readIndex) {
-                CLogger::Get()->Write("fifo", LogNotice, "Buffer full (Write); resetting.");
+            ++m_nWriteIndex;
+            if (m_nWriteIndex == m_nReadIndex) {
+                CLogger::Get()->Write(FromFIFO, LogNotice, "Buffer full (Write); resetting.");
                 Reset();
-            } else if (writeIndex == kLength) {
-                writeIndex = 0;
+            } else if (m_nWriteIndex == k_nLength) {
+                m_nWriteIndex = 0;
             }
         }
 
-        spinLock.Release();
+        m_SpinLock.Release();
     }
 
     /**
@@ -89,31 +109,32 @@ public:
 ////        spinLock.Release();
 //    }
 
-    void Read(u32 *bufferToFill, u16 numFrames, int sampleMaxValue, bool isI2S, bool debug) {
+    void Read(u32 *bufferToFill, u16 numFrames, int sampleMaxValue, bool isI2S, bool debug)
+    {
         float gain{.5f};
         float amp = gain * sampleMaxValue / (isI2S ? 1.f : 2.f);
 
-        spinLock.Acquire();
+        m_SpinLock.Acquire();
 
         for (u16 frame{0}; frame < numFrames; ++frame) {
-            auto frameStart{frame * kNumChannels};
+            auto frameStart{frame * k_nChannels};
 
-            for (u8 channel{0}; channel < kNumChannels; ++channel) {
+            for (u8 channel{0}; channel < k_nChannels; ++channel) {
                 // Get sample in range [-32768, 32767]
-                int sample{buffer[channel][readIndex]};
+                int sample{m_pBuffer[channel][m_nReadIndex]};
                 // Convert to float [-1, 1)
                 float fSample{static_cast<float>(sample) / static_cast<float>(1 << 15)};
                 // Scale to u32 range
                 int nSample{static_cast<int>(fSample * amp + (isI2S ? 0.f : sampleMaxValue / 2.f))};
 
                 if (debug && frame == 0 && channel == 0) {
-                    CLogger::Get()->Write("fifo", LogDebug, "sample = %d (%04x)", sample, sample);
-                    CLogger::Get()->Write("fifo", LogDebug, "fSample = %d / (1 << 15) = %f", sample, fSample);
-                    CLogger::Get()->Write("fifo", LogDebug, "amp = %f * %u / 2 = %f", gain, sampleMaxValue, amp);
+                    CLogger::Get()->Write(FromFIFO, LogDebug, "sample = %d (%04x)", sample, sample);
+                    CLogger::Get()->Write(FromFIFO, LogDebug, "fSample = %d / (1 << 15) = %f", sample, fSample);
+                    CLogger::Get()->Write(FromFIFO, LogDebug, "amp = %f * %u / 2 = %f", gain, sampleMaxValue, amp);
                     if (isI2S) {
-                        CLogger::Get()->Write("fifo", LogDebug, "nSample = %f * %f = %d (%08x)", fSample, amp, nSample, nSample);
+                        CLogger::Get()->Write(FromFIFO, LogDebug, "nSample = %f * %f = %d (%08x)", fSample, amp, nSample, nSample);
                     } else {
-                        CLogger::Get()->Write("fifo", LogDebug, "nSample = %f * %f + %u = %d (%08x)", fSample, amp, sampleMaxValue / 2, nSample, nSample);
+                        CLogger::Get()->Write(FromFIFO, LogDebug, "nSample = %f * %f + %u = %d (%08x)", fSample, amp, sampleMaxValue / 2, nSample, nSample);
                     }
                 }
 
@@ -121,36 +142,38 @@ public:
                 bufferToFill[frameStart + channel] = (u32) nSample;
             }
 
-            ++readIndex;
+            ++m_nReadIndex;
 
-            if (readIndex == writeIndex) {
-                CLogger::Get()->Write("fifo", LogNotice, "Buffer exhausted (Read); resetting.");
+            if (m_nReadIndex == m_nWriteIndex) {
+                CLogger::Get()->Write(FromFIFO, LogNotice, "Buffer exhausted (Read); resetting.");
                 Reset();
-            } else if (readIndex == kLength) {
-                readIndex = 0;
+            } else if (m_nReadIndex == k_nLength) {
+                m_nReadIndex = 0;
             }
         }
 
-        spinLock.Release();
+        m_SpinLock.Release();
     }
 
     /**
      * Write zeros to the fifo and reset the write and read indices.
      */
-    void Clear() {
-        memset(*buffer, 0, kNumChannels * kLength * sizeof(T));
+    void Clear()
+    {
+        memset(*m_pBuffer, 0, k_nChannels * k_nLength * sizeof(T));
         Reset();
 
-        CLogger::Get()->Write("fifo", LogDebug, "Cleared buffer. Num channels %u, "
-                                                "num frames %u, write index %u, "
-                                                "read index %u",
-                              kNumChannels, kLength, writeIndex, readIndex);
+        CLogger::Get()->Write(FromFIFO, LogDebug, "Cleared buffer. Num channels %u, "
+                                                  "num frames %u, write index %u, "
+                                                  "read index %u",
+                              k_nChannels, k_nLength, m_nWriteIndex, m_nReadIndex);
     }
 
 private:
-    void Reset() {
-        writeIndex = 0;
-        readIndex = static_cast<u16>(kLength / 2);
+    void Reset()
+    {
+        m_nWriteIndex = 0;
+        m_nReadIndex = static_cast<u32>(k_nLength / 2);
 //                // If length = 16 and readIndex = writeIndex = 10, desired readIndex
 //                // is 10 - 8 = 2;
 //                // if length = 16 and readIndex = writeIndex = 6, desired readIndex
@@ -162,13 +185,13 @@ private:
 //                readIndex = temp;
     }
 
-    const u8 kNumChannels;
-    const u32 kLength;
+    const u8 k_nChannels;
+    const u32 k_nLength;
 
-    T **buffer;
-    u32 writeIndex{0}, readIndex{0};
+    T **m_pBuffer;
+    u32 m_nWriteIndex{0}, m_nReadIndex{0};
 
-    CSpinLock spinLock;
+    CSpinLock m_SpinLock;
 };
 
 
