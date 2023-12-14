@@ -32,6 +32,7 @@
 
 #define PORT_NUMBER_NUM_BYTES 4
 #define UDP_PACKET_SIZE       (PACKET_HEADER_SIZE + WRITE_CHANNELS * AUDIO_BLOCK_FRAMES * TYPE_SIZE)
+#define RECEIVE_TIMEOUT_SEC   5
 
 class CJackTripClient
 {
@@ -51,8 +52,6 @@ public:
     virtual ~CJackTripClient();
 
 protected:
-    void Send();
-
     void Receive();
 
     bool ShouldLog() const;
@@ -68,7 +67,7 @@ protected:
     bool m_DebugAudio{false};
     float m_fPhasor{0.f}, m_fF0{440.f};
 private:
-    boolean IsExitPacket(int size, const u8 *packet) const;
+    static bool IsExitPacket(int size, const u8 *packet) ;
 
     void Disconnect();
 
@@ -107,6 +106,7 @@ private:
     };
 
     CSendTask *m_pSendTask;
+    unsigned int m_nLastReceive;
 };
 
 //// PWM //////////////////////////////////////////////////////////////////////

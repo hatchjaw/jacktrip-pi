@@ -142,83 +142,40 @@ bool CJackTripClient::Connect(void)
 
 void CJackTripClient::Disconnect()
 {
+    if (!m_Connected)
+        return;
+
     m_Logger.Write(FromJTC, LogDebug, "Disconnecting");
 
     m_Connected = false;
 
-//    CScheduler::Get()->ListTasks(m_pDevice);
+    assert(m_pSendTask);
 
-//    if (m_pSendTask != nullptr) {
     // The send task will be waiting. Signal it, it'll find that
     // disconnection has occurred, and it'll terminate.
-//        m_Event.Set();
-//        m_Logger.Write(FromJTC, LogDebug, "Waiting for SendTask to terminate.");
-//        m_pSendTask->WaitForTermination();
-//        m_Logger.Write(FromJTC, LogDebug, "Terminated.");
-
-    if (!m_pSendTask->IsSuspended()) {
-//        m_Event.Set();
-//        m_Logger.Write(FromJTC, LogDebug, "Waiting for SendTask to terminate.");
-//        m_pSendTask.WaitForTermination();
-//        m_Logger.Write(FromJTC, LogDebug, "Terminated.");
-//        m_Logger.Write(FromJTC, LogNotice, "Suspending task %s.", m_pSendTask.GetName());
-//        m_pSendTask.Suspend();
-
-        m_Event.Set();
-//        m_pSendTask.Terminate();
-        m_Logger.Write(FromJTC, LogDebug, "Waiting for SendTask to terminate.");
-//        m_pSendTask.WaitForTermination();
-        m_pSendTask->WaitForTermination();
-        m_Logger.Write(FromJTC, LogDebug, "Terminated.");
-        // Try to get the scheduler to remove the terminated task.
-//        CScheduler::Get()->Yield();
-//        m_SpinLock.Acquire();
-
-        // DON'T DELETE THE TASK; THE SCHEDULER DOES THIS.
+    m_Event.Set();
+    m_Logger.Write(FromJTC, LogDebug, "Waiting for SendTask to terminate.");
+    m_pSendTask->WaitForTermination();
+    m_Logger.Write(FromJTC, LogDebug, "Terminated.");
+    // DON'T DELETE THE TASK; THE SCHEDULER DOES THIS.
 //        delete m_pSendTask;
-        m_pSendTask = nullptr;
-
-//        m_SpinLock.Release();
-//        m_Logger.Write(FromJTC, LogDebug, "Recreating send task.");
-//        m_pSendTask = CSendTask(&m_pUdpSocket, &m_Event, &m_Connected);
-    }
-
-//    CScheduler::Get()->ListTasks(m_pDevice);
-
-//    if (m_pUdpSocket != nullptr) {
-//        m_Logger.Write(FromJTC, LogDebug, "Deleting datagram socket.");
-////        m_SpinLock.Acquire();
-//        delete m_pUdpSocket;
-//        m_pUdpSocket = nullptr;
-////        m_SpinLock.Release();
-//    }
+    m_pSendTask = nullptr;
 
     m_Logger.Write(FromJTC, LogDebug, "Resetting fifo and counters.");
     m_BufferCount = 0;
     m_nPacketsReceived = 0;
     m_PacketHeader.nSeqNumber = 0;
     m_FIFO.Clear();
-
-    m_Logger.Write(FromJTC, LogDebug, "Done.");
 }
 
 void CJackTripClient::Run()
 {
     if (!m_Connected) {
         if (Connect()) {
-//            CScheduler::Get()->MsSleep(250);
-            if (m_pSendTask == nullptr) {
-                m_pSendTask = new CSendTask(&m_pUdpSocket, &m_Event, &m_Connected);
-                m_Logger.Write(FromJTC, LogNotice, "Starting task %s.", m_pSendTask->GetName());
-            }
-//            } else {
-//            m_Logger.Write(FromJTC, LogNotice, "Starting task %s.", m_pSendTask.GetName());
-//            assert(m_pSendTask.IsSuspended());
-//            m_pSendTask.Start();
-
-//            m_Event.Set();
-//            }
-//            CScheduler::Get()->Yield();
+            assert(!m_pSendTask);
+            m_pSendTask = new CSendTask(&m_pUdpSocket, &m_Event, &m_Connected);
+            m_Logger.Write(FromJTC, LogNotice, "Starting task %s.", m_pSendTask->GetName());
+            m_nLastReceive = CTimer::Get()->GetUptime();
         } else {
             CScheduler::Get()->Sleep(2);
         }
@@ -226,40 +183,13 @@ void CJackTripClient::Run()
         Receive();
     }
 
-    // This is necessary to give the send task time to work.
+    // Give the send task time to work.
     CScheduler::Get()->Yield();
-
-//    Send();
-//    Receive();
-//    CScheduler::Get()->usSleep(QUEUE_SIZE_US * .925);
-}
-
-void CJackTripClient::Send()
-{
-    if (!m_Connected) return;
-
-//    assert(m_pUdpSocket);
-
-    u8 packet[UDP_PACKET_SIZE];
-    ++m_PacketHeader.nSeqNumber;
-
-    // Just send garbage with an appropriately-structured header.
-    memcpy(packet, &m_PacketHeader, PACKET_HEADER_SIZE);
-
-    auto nBytesSent = m_pUdpSocket.Send(packet, UDP_PACKET_SIZE, MSG_DONTWAIT);
-
-    if (nBytesSent != UDP_PACKET_SIZE) {
-        m_Logger.Write(FromJTC, LogWarning, "Sent %d bytes", nBytesSent);
-    }
 }
 
 void CJackTripClient::Receive()
 {
-    if (!m_Connected) {
-        return;
-    }
-
-//    assert(m_pUdpSocket);
+    assert(m_Connected);
 
     u8 buffer8[UDP_PACKET_SIZE];
 
@@ -267,60 +197,46 @@ void CJackTripClient::Receive()
     // TODO: probably need a spinlock here and one around Send
     int nBytesReceived{m_pUdpSocket.Receive(buffer8, sizeof buffer8, MSG_DONTWAIT)};//m_ReceivedCount == 0 ? MSG_DONTWAIT : 0)};
 
-    if (IsExitPacket(nBytesReceived, buffer8)) {
-        m_Logger.Write(FromJTC, LogNotice, "Exit packet received.");
-        Disconnect();
-        return;
-    } else if (nBytesReceived > 0 && nBytesReceived != UDP_PACKET_SIZE) {
-        m_Logger.Write(FromJTC, LogWarning, "Expected %u bytes; received %d bytes", UDP_PACKET_SIZE, nBytesReceived);
-    }
-
     if (nBytesReceived > 0) {
-        const TYPE *buffer[WRITE_CHANNELS];
-        for (int ch = 0; ch < WRITE_CHANNELS; ++ch) {
-            buffer[ch] = reinterpret_cast<TYPE *>(buffer8 + PACKET_HEADER_SIZE + CHANNEL_QUEUE_SIZE * ch);
+        if (IsExitPacket(nBytesReceived, buffer8)) {
+            m_Logger.Write(FromJTC, LogNotice, "Exit packet received.");
+            Disconnect();
+            CScheduler::Get()->Sleep(2);
+            return;
+        } else if (nBytesReceived != UDP_PACKET_SIZE) {
+            m_Logger.Write(FromJTC,
+                           LogWarning,
+                           "Malformed packet received. Expected %u bytes; received %d bytes.",
+                           UDP_PACKET_SIZE,
+                           nBytesReceived);
+        } else {
+            const TYPE *buffer[WRITE_CHANNELS];
+            for (int ch = 0; ch < WRITE_CHANNELS; ++ch) {
+                buffer[ch] = reinterpret_cast<TYPE *>(buffer8 + PACKET_HEADER_SIZE + CHANNEL_QUEUE_SIZE * ch);
+            }
+
+            m_FIFO.Write(buffer, AUDIO_BLOCK_FRAMES);
+
+            ++m_nPacketsReceived;
+            m_nLastReceive = CTimer::Get()->GetUptime();
+
+            // Notify the send task to send a packet.
+            m_Event.Set();
+
+            if (ShouldLog()) {
+                m_Logger.Write(FromJTC, LogDebug, "Received %d bytes via UDP", nBytesReceived);
+                HexDump(buffer8, nBytesReceived, true);
+            }
         }
-
-        m_FIFO.Write(buffer, AUDIO_BLOCK_FRAMES);
-
-        ++m_nPacketsReceived;
-
-        // Notify the send task to send a packet.
-        m_Event.Set();
-    }
-
-//    if (shouldLog()) {
-    if (ShouldLog() && false) {
-        m_Logger.Write(FromJTC, LogDebug, "Received %d bytes via UDP", nBytesReceived);
-//        mLogger.Write(FromKernel, LogDebug, "Received net buffer:");
-        HexDump(buffer8, nBytesReceived, true);
-
-//        mLogger.Write(FromKernel, LogDebug, "Got audio buffer:");
-//        hexDump(reinterpret_cast<u8 *>(b), WRITE_CHANNELS * CHANNEL_QUEUE_SIZE, false);
-//        hexDump(reinterpret_cast<u8 *>(buffer), WRITE_CHANNELS * CHANNEL_QUEUE_SIZE, false);
-
-//        for (unsigned frame = 0; frame < 8; ++frame) {
-//            mLogger.Write(FromKernel, LogDebug, "In Receive(), frame %u = %04x", frame, b[frame]);
-//        }
-
-//        mLogger.Write(FromKernel, LogDebug, "audioBuffer, channels interleaved:");
-//        CString log, chunk;
-//        for (unsigned s = 0; s < QUEUE_SIZE_FRAMES; ++s) {
-//            if (s > 0 && s % 4 == 0) {
-//                mLogger.Write(FromKernel, LogDebug, log);
-//                log = "";
-//            }
-//            chunk.Format("%04x ", audioBuffer[0][s]);
-//            log.Append(chunk);
-//            chunk.Format("%04x ", audioBuffer[1][s]);
-//            log.Append(chunk);
-//        }
-//        log.Append("\n");
-//        mLogger.Write(FromKernel, LogDebug, log);
+    } else if (CTimer::Get()->GetUptime() - m_nLastReceive > RECEIVE_TIMEOUT_SEC) {
+        m_Logger.Write(FromJTC, LogNotice, "Nothing received for %u seconds. Disconnecting.", RECEIVE_TIMEOUT_SEC);
+        Disconnect();
+        CScheduler::Get()->Sleep(2);
+        return;
     }
 }
 
-bool CJackTripClient::IsExitPacket(int size, const u8 *packet) const
+bool CJackTripClient::IsExitPacket(int size, const u8 *packet)
 {
     if (size == EXIT_PACKET_SIZE) {
         for (auto i{0}; i < EXIT_PACKET_SIZE; ++i) {
@@ -363,42 +279,45 @@ void CJackTripClient::HexDump(const u8 *buffer, unsigned int length, bool doHead
 
 //// SEND TASK ////////////////////////////////////////////////////////////////
 
+static const char FromJTCSend[] = "jtcsend";
+
 CJackTripClient::CSendTask::CSendTask(CSocket *pUdpSocket, CSynchronizationEvent *pEvent, bool *pConnected) :
 //        CTask(TASK_STACK_SIZE, true),
         m_pUdpSocket(pUdpSocket),
         m_pEvent(pEvent),
         m_pConnected(*pConnected)
 {
-    SetName("jtcsend");
-    CLogger::Get()->Write(FromJTC, LogDebug, "Constructing task jtcsend. Task is %ssuspended.", IsSuspended() ? "" : "not ");
+    SetName(FromJTCSend);
+    CLogger::Get()->Write(FromJTCSend, LogDebug, "Constructing task jtcsend. Task is %s.", IsSuspended() ? "suspended" : "running");
 }
 
 CJackTripClient::CSendTask::~CSendTask(void)
 {
-    CLogger::Get()->Write(FromJTC, LogDebug, "Destructing task %s.", GetName());
+//    CLogger::Get()->Write(FromJTCSend, LogDebug, "Destructing task %s.", GetName());
 }
 
 void CJackTripClient::CSendTask::Run(void)
 {
-    CLogger::Get()->Write(FromJTC, LogDebug, "Running task %s.", GetName());
+    CLogger::Get()->Write(FromJTCSend, LogNotice, "Running task %s.", GetName());
 
     assert(m_pUdpSocket);
 
     u8 packet[UDP_PACKET_SIZE];
     memcpy(packet, &m_PacketHeader, PACKET_HEADER_SIZE);
-    CScheduler::Get()->MsSleep(250);
-    // Send the zeroth packet.
-    m_pUdpSocket->Send(packet, UDP_PACKET_SIZE, MSG_DONTWAIT);
     // The JackTrip server checks whether a datagram is available, and, if not,
     // sleeps for 100 ms and tries again. This process repeats until a global
-    // timeout is exceeded, at which point it gives up. Delaying before the
-    // first send from the client doesn't appear to work; sending once, then
-    // waiting a little while does. Spamming the connection with an arbitrary
-    // number of packets is an option, but results in a lot of ICMP
-    // Destination unreachable (Port unreachable) warnings.
+    // timeout is exceeded, at which point it gives up. Just delaying before the
+    // first send from the client doesn't appear to work; giving JackTrip a
+    // moment to start listening for packets, sending once, then waiting a
+    // little while does. Spamming the connection with an arbitrar number of
+    // packets is an option, but results in a lot of ICMP "Destination
+    // unreachable (Port unreachable)" warnings.
+    CScheduler::Get()->MsSleep(100);
+    // Send the zeroth packet.
+    m_pUdpSocket->Send(packet, UDP_PACKET_SIZE, MSG_DONTWAIT);
     CScheduler::Get()->MsSleep(25);
 
-    CLogger::Get()->Write(FromJTC, LogNotice, "Sending datagrams.");
+    CLogger::Get()->Write(FromJTCSend, LogNotice, "Sending datagrams.");
 
     while (m_pConnected) {
         assert(m_pUdpSocket);
@@ -408,12 +327,12 @@ void CJackTripClient::CSendTask::Run(void)
 
         m_pUdpSocket->Send(packet, UDP_PACKET_SIZE, MSG_DONTWAIT);
 
-//        CScheduler::Get()->Yield();
         m_pEvent->Clear();
+        // Wait for a signal from the main (receive) task.
         m_pEvent->Wait();
     }
 
-    CLogger::Get()->Write(FromJTC, LogDebug, "Not connected; leaving CSendTask::Run");
+    CLogger::Get()->Write(FromJTCSend, LogDebug, "Disconnected; leaving CSendTask::Run");
 }
 
 

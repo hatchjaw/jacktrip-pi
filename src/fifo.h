@@ -61,15 +61,20 @@ public:
             }
 
             ++m_nWriteIndex;
+
             if (m_nWriteIndex == m_nReadIndex) {
                 if (m_LogThrottle == 0) {
                     CLogger::Get()->Write(FromFIFO, LogNotice, "Buffer full (Write); resetting.");
                     m_LogThrottle = 10000;
                 }
-                Reset();
-            } else if (m_nWriteIndex == k_nLength) {
+                Reset(Full);
+            }
+
+            if (m_nWriteIndex == k_nLength) {
                 m_nWriteIndex = 0;
-            } else if (m_LogThrottle > 0) {
+            }
+
+            if (m_LogThrottle > 0) {
                 --m_LogThrottle;
             }
         }
@@ -152,13 +157,17 @@ public:
 
             if (m_nReadIndex == m_nWriteIndex) {
                 if (m_LogThrottle == 0) {
-                    CLogger::Get()->Write(FromFIFO, LogNotice, "Buffer exhausted (Read); resetting.");
+                    CLogger::Get()->Write(FromFIFO, LogNotice, "Buffer full (Read); resetting.");
                     m_LogThrottle = 10000;
                 }
-                Reset();
-            } else if (m_nReadIndex == k_nLength) {
+                Reset(Empty);
+            }
+
+            if (m_nReadIndex == k_nLength) {
                 m_nReadIndex = 0;
-            } else if (m_LogThrottle > 0) {
+            }
+
+            if (m_LogThrottle > 0) {
                 --m_LogThrottle;
             }
         }
@@ -171,8 +180,13 @@ public:
      */
     void Clear()
     {
-        memset(*m_pBuffer, 0, k_nChannels * k_nLength * sizeof(T));
+        m_SpinLock.Acquire();
+//        memset(*m_pBuffer, 0, k_nChannels * k_nLength * sizeof(T));
+        for (int ch = 0; ch < k_nChannels; ++ch) {
+            memset(m_pBuffer[ch], 0, k_nLength * sizeof(T));
+        }
         Reset();
+        m_SpinLock.Release();
 
         CLogger::Get()->Write(FromFIFO, LogDebug, "Cleared buffer. Num channels %u, "
                                                   "num frames %u, write index %u, "
@@ -181,19 +195,39 @@ public:
     }
 
 private:
-    void Reset()
+    enum TFIFOState
     {
-        m_nWriteIndex = 0;
-        m_nReadIndex = static_cast<u32>(k_nLength / 2);
-//                // If length = 16 and readIndex = writeIndex = 10, desired readIndex
-//                // is 10 - 8 = 2;
-//                // if length = 16 and readIndex = writeIndex = 6, desired readIndex
-//                // is 6 - 8 + 16 = 14
-//                int temp = static_cast<int>(readIndex) - (kLength / 2);
-//                if (temp < 0) {
-//                    temp += kLength;
-//                }
-//                readIndex = temp;
+        OK,
+        Empty,
+        Full
+    };
+
+    void Reset(TFIFOState state = OK)
+    {
+        int temp;
+
+        switch (state) {
+            case Empty:
+                // No new samples left to read, so move the read-index back.
+                temp = static_cast<int>(m_nReadIndex) - (k_nLength / 2);
+                if (temp < 0) {
+                    temp += k_nLength;
+                }
+                m_nReadIndex = temp;
+                break;
+            case Full:
+                // No space to write new samples, so move the write-index back.
+                temp = static_cast<int>(m_nWriteIndex) - (k_nLength / 2);
+                if (temp < 0) {
+                    temp += k_nLength;
+                }
+                m_nWriteIndex = temp;
+                break;
+            default:
+                m_nWriteIndex = 0;
+                m_nReadIndex = static_cast<u32>(k_nLength / 2);
+                break;
+        }
     }
 
     const u8 k_nChannels;
