@@ -18,3 +18,7 @@ SDCARD = /run/media/tar/RPI
   - this builds the firmware and bootloader and installs them on the SD card
 - `cd ../sample/[sample]`, `make` and `make install`
   - this builds the kernel image and installs it on the SD card
+
+## Issues
+- Too much logging obstructs other tasks, e.g. audio.
+- Sometimes fifo reads get out of sync somehow, and periodic ring-mod-like distortion results.

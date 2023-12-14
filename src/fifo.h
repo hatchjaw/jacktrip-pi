@@ -27,7 +27,7 @@ template<typename T>
 class CFIFO
 {
 public:
-    CFIFO(u8 numChannels, u16 length, int sampleMaxValue = (1 << 15) - 1) :
+    CFIFO(u8 numChannels, u16 length, int sampleMaxValue = FACTOR) :
             k_nChannels{numChannels},
             k_nLength{length},
             m_pBuffer{new T *[numChannels]}
@@ -54,6 +54,7 @@ public:
     void Write(const T **dataToWrite, u16 numFrames)
     {
         m_SpinLock.Acquire();
+
         for (int n{0}; n < numFrames; ++n) {
             for (int ch{0}; ch < k_nChannels; ++ch) {
                 m_pBuffer[ch][m_nWriteIndex] = dataToWrite[ch][n];
@@ -61,10 +62,15 @@ public:
 
             ++m_nWriteIndex;
             if (m_nWriteIndex == m_nReadIndex) {
-                CLogger::Get()->Write(FromFIFO, LogNotice, "Buffer full (Write); resetting.");
+                if (m_LogThrottle == 0) {
+                    CLogger::Get()->Write(FromFIFO, LogNotice, "Buffer full (Write); resetting.");
+                    m_LogThrottle = 10000;
+                }
                 Reset();
             } else if (m_nWriteIndex == k_nLength) {
                 m_nWriteIndex = 0;
+            } else if (m_LogThrottle > 0) {
+                --m_LogThrottle;
             }
         }
 
@@ -145,10 +151,15 @@ public:
             ++m_nReadIndex;
 
             if (m_nReadIndex == m_nWriteIndex) {
-                CLogger::Get()->Write(FromFIFO, LogNotice, "Buffer exhausted (Read); resetting.");
+                if (m_LogThrottle == 0) {
+                    CLogger::Get()->Write(FromFIFO, LogNotice, "Buffer exhausted (Read); resetting.");
+                    m_LogThrottle = 10000;
+                }
                 Reset();
             } else if (m_nReadIndex == k_nLength) {
                 m_nReadIndex = 0;
+            } else if (m_LogThrottle > 0) {
+                --m_LogThrottle;
             }
         }
 
@@ -192,6 +203,7 @@ private:
     u32 m_nWriteIndex{0}, m_nReadIndex{0};
 
     CSpinLock m_SpinLock;
+    int m_LogThrottle{0};
 };
 
 

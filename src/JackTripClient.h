@@ -19,7 +19,6 @@
 #ifndef JACKTRIP_PI_JACKTRIPCLIENT_H
 #define JACKTRIP_PI_JACKTRIPCLIENT_H
 
-
 #include <circle/sound/pwmsoundbasedevice.h>
 #include <circle/sound/i2ssoundbasedevice.h>
 #include <circle/sched/task.h>
@@ -30,6 +29,9 @@
 #include "config.h"
 #include "fifo.h"
 #include "PacketHeader.h"
+
+#define PORT_NUMBER_NUM_BYTES 4
+#define UDP_PACKET_SIZE       (PACKET_HEADER_SIZE + WRITE_CHANNELS * AUDIO_BLOCK_FRAMES * TYPE_SIZE)
 
 class CJackTripClient
 {
@@ -71,39 +73,37 @@ private:
     void Disconnect();
 
     CNetSubSystem *m_pNet;
-    CSocket *m_pUdpSocket;
+    CSocket m_pUdpSocket;
     CSynchronizationEvent m_Event;
+    CSpinLock m_SpinLock;
 
     u16 m_nServerUdpPort{0};
     TJackTripPacketHeader m_PacketHeader{
             0,
             0,
-            QUEUE_SIZE_FRAMES,
-            TSamplingRate::SR44,
-            AUDIO_BIT_RES * 8,
+            AUDIO_BLOCK_FRAMES,
+            JACKTRIP_SAMPLE_RATE,
+            JACKTRIP_BIT_RES * 8,
             WRITE_CHANNELS,
             WRITE_CHANNELS
     };
-    const u16 k_UdpPacketSize{PACKET_HEADER_SIZE + WRITE_CHANNELS * QUEUE_SIZE_FRAMES * TYPE_SIZE};
 
     int m_nPacketsReceived{0};
 
     class CSendTask : public CTask
     {
     public:
-        CSendTask(CSocket *pUdpSocket, CSynchronizationEvent &pEvent, bool &connected);
+        CSendTask(CSocket *pUdpSocket, CSynchronizationEvent *pEvent, bool *pConnected);
 
         ~CSendTask(void) override;
 
         void Run(void) override;
 
     private:
-        const u16 k_nUdpPacketSize{PACKET_HEADER_SIZE + WRITE_CHANNELS * QUEUE_SIZE_FRAMES * TYPE_SIZE};
-
         CSocket *m_pUdpSocket;
-        CSynchronizationEvent &m_Event;
-        bool &m_Connected;
-        TJackTripPacketHeader m_PacketHeader{0, 0, QUEUE_SIZE_FRAMES, TSamplingRate::SR44, AUDIO_BIT_RES * 8, WRITE_CHANNELS, WRITE_CHANNELS};
+        CSynchronizationEvent *m_pEvent;
+        bool &m_pConnected;
+        TJackTripPacketHeader m_PacketHeader{0, 0, AUDIO_BLOCK_FRAMES, JACKTRIP_SAMPLE_RATE, JACKTRIP_BIT_RES * 8, WRITE_CHANNELS, WRITE_CHANNELS};
     };
 
     CSendTask *m_pSendTask;
