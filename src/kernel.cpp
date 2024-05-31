@@ -19,19 +19,11 @@
 #include "kernel.h"
 #include <assert.h>
 
-// Syslog configuration
-static const u8 SysLogServer[] = {192, 168, 10, 10};
-static const u16 usServerPort = 8514;        // standard port is 514
-
-//static const u16 udpLocalPort = 41814;
-//static const u16 udpRemotePort = 14841;
-//static const u8 multicastGroup[] = {244, 4, 244, 4};
-
 // Network configuration
-static const u8 IPAddress[] = {192, 168, 10, 250};
-static const u8 NetMask[] = {255, 255, 255, 0};
-static const u8 DefaultGateway[] = {192, 168, 10, 1};
-static const u8 DNSServer[] = {192, 168, 10, 1};
+static const u8 IPAddress[] = {CLIENT_IP};
+static const u8 NetMask[] = {NETMASK};
+static const u8 DefaultGateway[] = {GATEWAY};
+static const u8 DNSServer[] = {GATEWAY};
 
 static const char FromKernel[] = "kernel";
 
@@ -120,10 +112,12 @@ TShutdownMode CKernel::Run(void) {
     m_Logger.Write(FromKernel, LogNotice, "Compile time: " __DATE__ " " __TIME__);
 
     if (!m_pJTC->Start()) {
-        m_Logger.Write(FromKernel, LogPanic, "Failed to start JackTrip client.");
+        m_Logger.Write(FromKernel, LogPanic, "Failed to start JackTrip client; system will halt now.");
         return ShutdownHalt;
     } else {
-        m_Logger.Write(FromKernel, LogNotice, "Started JackTrip client.");
+        m_Logger.Write(FromKernel, LogNotice,
+                       "Started JackTrip client. Sample rate %u, block size %u, num channels %u.",
+                       SAMPLE_RATE, AUDIO_BLOCK_FRAMES, WRITE_CHANNELS);
     }
 
     while (m_pJTC->IsActive()) {

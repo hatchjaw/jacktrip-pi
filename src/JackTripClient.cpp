@@ -17,7 +17,7 @@
  */
 
 #include "JackTripClient.h"
-#include <circle/sched/scheduler.h>
+//#include <circle/sched/scheduler.h>
 #include <circle/net/in.h>
 #include "math.h"
 
@@ -33,20 +33,16 @@ CJackTripClient::CJackTripClient(CLogger *pLogger, CNetSubSystem *pNet, CDevice 
         m_pDevice(pDevice),
         m_FIFO{WRITE_CHANNELS, AUDIO_BLOCK_FRAMES * 16},
         m_pNet(pNet),
-        m_pUdpSocket(pNet, IPPROTO_UDP),
-//        m_pSendTask(&m_pUdpSocket, &m_Event, &m_Connected)
-        m_pSendTask(nullptr)
+        m_pUdpSocket(pNet, IPPROTO_UDP)
 {
-}
-
-CJackTripClient::~CJackTripClient()
-{
-//    delete m_pUdpSocket;
-//    delete m_pSendTask;
+    CString ipString;
+    m_pNet->GetConfig()->GetIPAddress()->Format(&ipString);
+    m_Logger.Write(FromJTC, LogNotice, "IP address is %s", (const char *) ipString);
 }
 
 bool CJackTripClient::Initialize(void)
 {
+//    m_pClockTask = new CClockTask();
     return true;
 }
 
@@ -73,7 +69,7 @@ bool CJackTripClient::Connect(void)
         m_Logger.Write(FromJTC, LogError, "Cannot bind TCP socket (port %u)", tcpClientPort);
         Disconnect();
         return false;
-    } else {
+    } else if (g_Verbose) {
         m_Logger.Write(FromJTC, LogNotice, "Successfully bound TCP socket (port %u)", tcpClientPort);
     }
 
@@ -94,7 +90,7 @@ bool CJackTripClient::Connect(void)
         m_Logger.Write(FromJTC, LogError, "Failed to send UDP port to server.");
         Disconnect();
         return false;
-    } else {
+    } else if (g_Verbose) {
         m_Logger.Write(FromJTC, LogNotice, "Sent UDP port number %u to JackTrip server.", udpPort);
     }
 
@@ -107,12 +103,9 @@ bool CJackTripClient::Connect(void)
         m_Logger.Write(FromJTC, LogError, "Failed to read UDP port from server.");
         Disconnect();
         return false;
-    } else {
+    } else if (g_Verbose) {
         m_Logger.Write(FromJTC, LogNotice, "Received port %u from JackTrip server.", m_nServerUdpPort);
     }
-
-//    m_pUdpSocket = new CSocket(m_pNet, IPPROTO_UDP);
-//    assert(m_pUdpSocket);
 
     // Free up the socket for re-binding.
     m_pUdpSocket = CSocket(m_pNet, IPPROTO_UDP);
@@ -122,7 +115,7 @@ bool CJackTripClient::Connect(void)
         m_Logger.Write(FromJTC, LogError, "Failed to bind UDP socket to port %u.", udpPort);
         Disconnect();
         return false;
-    } else {
+    } else if (g_Verbose) {
         m_Logger.Write(FromJTC, LogNotice, "UDP Socket successfully bound to port %u", udpPort);
     }
 
@@ -145,7 +138,7 @@ void CJackTripClient::Disconnect()
     if (!m_Connected)
         return;
 
-    m_Logger.Write(FromJTC, LogDebug, "Disconnecting");
+    m_Logger.Write(FromJTC, LogNotice, "Disconnecting");
 
     m_Connected = false;
 
@@ -154,14 +147,16 @@ void CJackTripClient::Disconnect()
     // The send task will be waiting. Signal it, it'll find that
     // disconnection has occurred, and it'll terminate.
     m_Event.Set();
-    m_Logger.Write(FromJTC, LogDebug, "Waiting for SendTask to terminate.");
+    if (g_Verbose) m_Logger.Write(FromJTC, LogDebug, "Waiting for SendTask to terminate.");
     m_pSendTask->WaitForTermination();
-    m_Logger.Write(FromJTC, LogDebug, "Terminated.");
+    if (g_Verbose) m_Logger.Write(FromJTC, LogDebug, "Terminated.");
+
     // DON'T DELETE THE TASK; THE SCHEDULER DOES THIS.
 //        delete m_pSendTask;
     m_pSendTask = nullptr;
+    m_pClockTask = nullptr;
 
-    m_Logger.Write(FromJTC, LogDebug, "Resetting fifo and counters.");
+    if (g_Verbose) m_Logger.Write(FromJTC, LogDebug, "Resetting fifo and counters.");
     m_BufferCount = 0;
     m_nPacketsReceived = 0;
     m_PacketHeader.nSeqNumber = 0;
@@ -171,10 +166,12 @@ void CJackTripClient::Disconnect()
 void CJackTripClient::Run()
 {
     if (!m_Connected) {
+        // TODO: Move the connection loop into Connect()
         if (Connect()) {
             assert(!m_pSendTask);
+            // Start the send task.
             m_pSendTask = new CSendTask(&m_pUdpSocket, &m_Event, &m_Connected);
-            m_Logger.Write(FromJTC, LogNotice, "Starting task %s.", m_pSendTask->GetName());
+            if (g_Verbose) m_Logger.Write(FromJTC, LogNotice, "Starting task %s.", m_pSendTask->GetName());
             m_nLastReceive = CTimer::Get()->GetUptime();
         } else {
             CScheduler::Get()->Sleep(2);
@@ -193,8 +190,8 @@ void CJackTripClient::Receive()
 
     u8 buffer8[UDP_PACKET_SIZE];
 
-    // TODO: check how long since last receive; disconnect if threshold exceeded
     // TODO: probably need a spinlock here and one around Send
+    // ...but there's one in CFIFO::Write, so be careful.
     int nBytesReceived{m_pUdpSocket.Receive(buffer8, sizeof buffer8, MSG_DONTWAIT)};//m_ReceivedCount == 0 ? MSG_DONTWAIT : 0)};
 
     if (nBytesReceived > 0) {
@@ -229,7 +226,7 @@ void CJackTripClient::Receive()
             }
         }
     } else if (CTimer::Get()->GetUptime() - m_nLastReceive > RECEIVE_TIMEOUT_SEC) {
-        m_Logger.Write(FromJTC, LogNotice, "Nothing received for %u seconds. Disconnecting.", RECEIVE_TIMEOUT_SEC);
+        m_Logger.Write(FromJTC, LogNotice, "Nothing received for %u seconds.", RECEIVE_TIMEOUT_SEC);
         Disconnect();
         CScheduler::Get()->Sleep(2);
         return;
@@ -249,7 +246,7 @@ bool CJackTripClient::IsExitPacket(int size, const u8 *packet)
     return false;
 }
 
-bool CJackTripClient::ShouldLog() const { return false; }//m_BufferCount > 0 && m_BufferCount % 10000 == 0; }
+bool CJackTripClient::ShouldLog() const { return g_Verbose && m_BufferCount > 0 && m_BufferCount % 10000 <= 1; }
 
 void CJackTripClient::HexDump(const u8 *buffer, unsigned int length, bool doHeader)
 {
@@ -288,17 +285,18 @@ CJackTripClient::CSendTask::CSendTask(CSocket *pUdpSocket, CSynchronizationEvent
         m_pConnected(*pConnected)
 {
     SetName(FromJTCSend);
-    CLogger::Get()->Write(FromJTCSend, LogDebug, "Constructing task jtcsend. Task is %s.", IsSuspended() ? "suspended" : "running");
+    if (g_Verbose)
+        CLogger::Get()->Write(FromJTCSend, LogDebug, "Constructing task jtcsend. Task is %s.", IsSuspended() ? "suspended" : "running");
 }
 
 CJackTripClient::CSendTask::~CSendTask(void)
 {
-//    CLogger::Get()->Write(FromJTCSend, LogDebug, "Destructing task %s.", GetName());
 }
 
 void CJackTripClient::CSendTask::Run(void)
 {
-    CLogger::Get()->Write(FromJTCSend, LogNotice, "Running task %s.", GetName());
+    if (g_Verbose)
+        CLogger::Get()->Write(FromJTCSend, LogNotice, "Running task %s.", GetName());
 
     assert(m_pUdpSocket);
 
@@ -309,7 +307,7 @@ void CJackTripClient::CSendTask::Run(void)
     // timeout is exceeded, at which point it gives up. Just delaying before the
     // first send from the client doesn't appear to work; giving JackTrip a
     // moment to start listening for packets, sending once, then waiting a
-    // little while does. Spamming the connection with an arbitrar number of
+    // little while does. Spamming the connection with an arbitrary number of
     // packets is an option, but results in a lot of ICMP "Destination
     // unreachable (Port unreachable)" warnings.
     CScheduler::Get()->MsSleep(100);
@@ -332,7 +330,7 @@ void CJackTripClient::CSendTask::Run(void)
         m_pEvent->Wait();
     }
 
-    CLogger::Get()->Write(FromJTCSend, LogDebug, "Disconnected; leaving CSendTask::Run");
+    CLogger::Get()->Write(FromJTCSend, LogDebug, "Disconnected; leaving task %s.", GetName());
 }
 
 
@@ -358,13 +356,14 @@ unsigned int JackTripClientPWM::GetChunk(u32 *pBuffer, unsigned int nChunkSize)
     auto sampleZeroValue = m_nZeroLevel; //sampleMaxValue / 2;
 
     if (m_DebugAudio) {
-        if (m_BufferCount % 7 == 0) {
-            m_Pulse = !m_Pulse;
-        }
         float gain{.5f};
         float amp = gain * sampleMaxValue / 2.f;
-        // Get current square wave sample.
-        int sample{m_Pulse ? (1 << 15) - 1 : -(1 << 15)};
+        // Get current sine wave sample.
+        int sample{static_cast<int>((sin(m_fPhasor) + 1) * (1 << 15))};
+        m_fPhasor += MATH_2_PI * m_fF0 / SAMPLE_RATE;
+        if (m_fPhasor > MATH_PI) {
+            m_fPhasor -= MATH_2_PI;
+        }
         // Convert to float [-1, 1)
         float fSample{static_cast<float>(sample) / static_cast<float>(1 << 15)};
         // Scale to u32 range
@@ -426,9 +425,6 @@ unsigned int JackTripClientI2S::GetChunk(u32 *pBuffer, unsigned int nChunkSize)
     auto sampleMaxValue = k_nMaxLevel;
 
     if (m_DebugAudio) {
-        if (m_BufferCount % 7 == 0) {
-            m_Pulse = !m_Pulse;
-        }
         float gain{.1f};
         float amp = gain * sampleMaxValue;
 

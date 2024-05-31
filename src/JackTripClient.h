@@ -26,6 +26,8 @@
 #include <circle/net/ipaddress.h>
 #include <circle/net/socket.h>
 #include <circle/util.h>
+#include <circle/sched/scheduler.h>
+#include <circle/bcmrandom.h>
 #include "config.h"
 #include "fifo.h"
 #include "PacketHeader.h"
@@ -39,6 +41,8 @@ class CJackTripClient
 public:
     CJackTripClient(CLogger *pLogger, CNetSubSystem *pNet, CDevice *pDevice);
 
+    virtual ~CJackTripClient() = default;
+
     bool Initialize(void);
 
     virtual boolean Start(void) = 0;
@@ -48,8 +52,6 @@ public:
     bool Connect();
 
     void Run();
-
-    virtual ~CJackTripClient();
 
 protected:
     void Receive();
@@ -63,7 +65,7 @@ protected:
     CFIFO<TYPE> m_FIFO;
     bool m_Connected{false};
     int m_BufferCount{0};
-    bool m_Pulse{false};
+
     bool m_DebugAudio{false};
     float m_fPhasor{0.f}, m_fF0{440.f};
 private:
@@ -88,6 +90,7 @@ private:
     };
 
     int m_nPacketsReceived{0};
+    unsigned int m_nLastReceive{0};
 
     class CSendTask : public CTask
     {
@@ -105,8 +108,55 @@ private:
         TJackTripPacketHeader m_PacketHeader{0, 0, AUDIO_BLOCK_FRAMES, JACKTRIP_SAMPLE_RATE, JACKTRIP_BIT_RES * 8, WRITE_CHANNELS, WRITE_CHANNELS};
     };
 
-    CSendTask *m_pSendTask;
-    unsigned int m_nLastReceive;
+    class CClockTask : public CTask
+    {
+    public:
+        CClockTask() : m_Clock(GPIOClockPCM, GPIOClockSourcePLLD) {}
+
+        ~CClockTask(void) override = default;
+
+        void Run(void) override {
+            unsigned nSampleRate{SAMPLE_RATE};
+            unsigned nClockFreq =
+                    CMachineInfo::Get ()->GetGPIOClockSourceRate (GPIOClockSourcePLLD);
+            CBcmRandomNumberGenerator rand;
+
+            while (true)
+            {
+                CScheduler::Get()->MsSleep(5000);
+
+                nSampleRate += (rand.GetNumber() % 1000 - 500);
+
+                if (8000 <= nSampleRate && nSampleRate <= 192000) {
+                    return;
+                }
+
+                // E.g. 500'000'000 / 64 / 48000 = 162.76... => 162
+                unsigned nDivI = nClockFreq / (32*2) / nSampleRate;
+                // E.g. 500'000'000 / 64 % 48000 = 36500
+                unsigned nTemp = nClockFreq / (32*2) % nSampleRate;
+                // E.g. (36500 * 4096 + 24000) / 48000 = 3115.166... => 3115
+                unsigned nDivF = (nTemp * 4096 + nSampleRate/2) / nSampleRate;
+                assert (nDivF <= 4096);
+                if (nDivF > 4095)
+                {
+                    nDivI++;
+                    nDivF = 0;
+                }
+
+                CLogger::Get()->Write("clocktask", LogDebug, "Setting Fs: %u, DivI: %u, DivF: %u",
+                                      nSampleRate, nDivI, nDivF);
+
+                m_Clock.Start (nDivI, nDivF, nDivF > 0 ? 1 : 0);
+            }
+        }
+
+    private:
+        CGPIOClock m_Clock;
+    };
+
+    CSendTask *m_pSendTask{nullptr};
+    CClockTask *m_pClockTask{nullptr};
 };
 
 //// PWM //////////////////////////////////////////////////////////////////////

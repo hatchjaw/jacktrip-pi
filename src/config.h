@@ -19,12 +19,17 @@
 #ifndef JACKTRIP_PI_CONFIG_H
 #define JACKTRIP_PI_CONFIG_H
 
+constexpr bool g_Verbose{false};
+
 // 0: 22050, 1: 32000, 2: 44100, 3: 48000
 #define SR_FORMAT            3
 
 // Format in which to exchange samples with JackTrip
 // 0: u8, 1: s16, 2: s24, 3: u32 (See TSoundFormat)
 #define SAMPLE_FORMAT        1
+
+// 1: Mono, 2: Stereo
+#define WRITE_CHANNELS       2
 
 #if SR_FORMAT == 0
 #define SAMPLE_RATE          22050
@@ -66,8 +71,7 @@
 #define NULL_LEVEL           (1 << 31)
 #endif
 
-// 1: Mono, 2: Stereo
-#define WRITE_CHANNELS       2
+#define AUDIO_VOLUME         0.8f
 
 #define AUDIO_BLOCK_FRAMES   32
 #define QUEUE_SIZE_US        (AUDIO_BLOCK_FRAMES * 1000000 / SAMPLE_RATE)
@@ -75,15 +79,28 @@
 // I2C slave address of the DAC (0 for auto probing)
 #define DAC_I2C_ADDRESS      0
 
+// IP of the JackTrip server (i.e. the IPv4 address of your ethernet interface)
 #define SERVER_IP            192,168,10,10
+// Other ethernet interface settings; should match settings on your machine.
+#define NETMASK              255,255,255,0
+#define GATEWAY              192,168,10,1
+
+// A JackTrip hub server uses this port during the TCP handshake.
 #define JACKTRIP_TCP_PORT    4464
+
+// The IP address to be assigned to the Raspberry Pi.
+#define CLIENT_IP            192,168,10,250
+
+// It's going to be necessary to assign some dynamic port numbers.
 // The Internet Assigned Numbers Authority (IANA) suggests the range 49152 to
-// 65535 for dynamic or private ports.*/
+// 65535 for dynamic or private ports.
 #define DYNAMIC_PORT_START   49152
 #define DYNAMIC_PORT_END     ((1 << 16) - 1)
 #define DYNAMIC_PORT_RANGE   (DYNAMIC_PORT_END - DYNAMIC_PORT_START)
 
 #define CHANNEL_QUEUE_SIZE   (AUDIO_BLOCK_FRAMES * TYPE_SIZE)
+
+// JackTrip sends a packet of 63 bytes each with value 0xff
 #define EXIT_PACKET_SIZE     63
 
 #endif

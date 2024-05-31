@@ -1,3 +1,8 @@
+add_compile_definitions(jtclient
+        RASPPI=3
+        AARCH=64
+)
+
 add_executable(jtclient
         main.cpp
         kernel.cpp

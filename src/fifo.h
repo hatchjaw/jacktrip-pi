@@ -47,12 +47,13 @@ public:
     }
 
     /**
-     * Write
+     * Write samples to the fifo. Channel-interleaved, like JackTrip.
      * @param dataToWrite
      * @param numFrames
      */
     void Write(const T **dataToWrite, u16 numFrames)
     {
+        auto reset{false};
         m_SpinLock.Acquire();
 
         for (int n{0}; n < numFrames; ++n) {
@@ -63,10 +64,11 @@ public:
             ++m_nWriteIndex;
 
             if (m_nWriteIndex == m_nReadIndex) {
-                if (m_LogThrottle == 0) {
-                    CLogger::Get()->Write(FromFIFO, LogNotice, "Buffer full (Write); resetting.");
-                    m_LogThrottle = 10000;
-                }
+//                if (m_LogThrottle == 0) {
+//                    CLogger::Get()->Write(FromFIFO, LogNotice, "Buffer full (Write); resetting.");
+//                    m_LogThrottle = 10000;
+//                }
+                reset = true;
                 Reset(Full);
             }
 
@@ -80,50 +82,30 @@ public:
         }
 
         m_SpinLock.Release();
+
+        if (g_Verbose && reset) {
+            CLogger::Get()->Write(FromFIFO, LogNotice, "Buffer full (Write); resetting.");
+        }
     }
 
     /**
-     * Read channel-interleaved samples from the fifo.
-     * @param bufferToFill
-     * @param numFrames
+     * Read samples into a buffer. Sample-interleaved, like Circle.
+     *
+     * TODO: extract the sample-conversion logic into a dedicated class, or the sound device.
+     *
+     * @param bufferToFill The sample-interleaved buffer into which to write samples.
+     * @param numFrames The number of frames to write, i.e. for each frame, a number of samples
+     * equal to the number of channels in the fifo will be written to the buffer.
+     * @param sampleMaxValue Different sound devices and sample rates may have differing bit
+     * resolutions; the maximum permitted sample value is required here.
+     * @param isI2S
+     * @param debug
      */
-//    void read(T **bufferToFill, u16 numFrames) {
-//        for (u16 n{0}; n < numFrames; ++n, ++readIndex) {
-//            if (readIndex == kLength) {
-//                readIndex = 0;
-//            }
-//
-//            for (int ch{0}; ch < kNumChannels; ++ch) {
-//                bufferToFill[ch][n] = buffer[ch][readIndex];
-//            }
-//        }
-//    }
-
-    /**
-     * Read frame-interleaved samples from the fifo.
-     * @param bufferToFill
-     * @param numFrames
-     */
-//    void Read(T *bufferToFill, u16 numFrames) {
-////        spinLock.Acquire();
-//        for (u16 frame{0}; frame < numFrames; ++frame, ++readIndex) {
-//            if (readIndex == kLength) {
-//                readIndex = 0;
-//            }
-//
-//            auto frameStart{frame * kNumChannels};
-//
-//            for (u8 channel{0}; channel < kNumChannels; ++channel) {
-//                bufferToFill[frameStart + channel] = buffer[channel][readIndex];
-//            }
-//        }
-////        spinLock.Release();
-//    }
-
     void Read(u32 *bufferToFill, u16 numFrames, int sampleMaxValue, bool isI2S, bool debug)
     {
-        float gain{.5f};
-        float amp = gain * sampleMaxValue / (isI2S ? 1.f : 2.f);
+        auto reset{false};
+        float amp = AUDIO_VOLUME * sampleMaxValue / (isI2S ? 1.f : 2.f);
+        float offset = isI2S ? 0.f : sampleMaxValue / 2.f;
 
         m_SpinLock.Acquire();
 
@@ -136,12 +118,12 @@ public:
                 // Convert to float [-1, 1)
                 float fSample{static_cast<float>(sample) / static_cast<float>(1 << 15)};
                 // Scale to u32 range
-                int nSample{static_cast<int>(fSample * amp + (isI2S ? 0.f : sampleMaxValue / 2.f))};
+                int nSample{static_cast<int>(fSample * amp + offset)};
 
                 if (debug && frame == 0 && channel == 0) {
                     CLogger::Get()->Write(FromFIFO, LogDebug, "sample = %d (%04x)", sample, sample);
                     CLogger::Get()->Write(FromFIFO, LogDebug, "fSample = %d / (1 << 15) = %f", sample, fSample);
-                    CLogger::Get()->Write(FromFIFO, LogDebug, "amp = %f * %u / 2 = %f", gain, sampleMaxValue, amp);
+                    CLogger::Get()->Write(FromFIFO, LogDebug, "amp = %f * %u / 2 = %f", AUDIO_VOLUME, sampleMaxValue, amp);
                     if (isI2S) {
                         CLogger::Get()->Write(FromFIFO, LogDebug, "nSample = %f * %f = %d (%08x)", fSample, amp, nSample, nSample);
                     } else {
@@ -149,17 +131,17 @@ public:
                     }
                 }
 
-//                bufferToFill[frameStart + channel] = (u32) buffer[channel][readIndex];
                 bufferToFill[frameStart + channel] = (u32) nSample;
             }
 
             ++m_nReadIndex;
 
             if (m_nReadIndex == m_nWriteIndex) {
-                if (m_LogThrottle == 0) {
-                    CLogger::Get()->Write(FromFIFO, LogNotice, "Buffer full (Read); resetting.");
-                    m_LogThrottle = 10000;
-                }
+//                if (m_LogThrottle == 0) {
+//                    CLogger::Get()->Write(FromFIFO, LogNotice, "Buffer full (Read); resetting.");
+//                    m_LogThrottle = 10000;
+//                }
+                reset = true;
                 Reset(Empty);
             }
 
@@ -173,6 +155,10 @@ public:
         }
 
         m_SpinLock.Release();
+
+        if (g_Verbose && reset) {
+            CLogger::Get()->Write(FromFIFO, LogNotice, "Buffer full (Read); resetting.");
+        }
     }
 
     /**
@@ -188,10 +174,12 @@ public:
         Reset();
         m_SpinLock.Release();
 
-        CLogger::Get()->Write(FromFIFO, LogDebug, "Cleared buffer. Num channels %u, "
-                                                  "num frames %u, write index %u, "
-                                                  "read index %u",
-                              k_nChannels, k_nLength, m_nWriteIndex, m_nReadIndex);
+        if (g_Verbose) {
+            CLogger::Get()->Write(FromFIFO, LogDebug, "Cleared buffer. Num channels %u, "
+                                                      "num frames %u, write index %u, "
+                                                      "read index %u",
+                                  k_nChannels, k_nLength, m_nWriteIndex, m_nReadIndex);
+        }
     }
 
 private:
@@ -239,6 +227,5 @@ private:
     CSpinLock m_SpinLock;
     int m_LogThrottle{0};
 };
-
 
 #endif //JACKTRIP_PI_FIFO_H
